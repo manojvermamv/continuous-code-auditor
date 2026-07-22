@@ -1,6 +1,7 @@
 # continuous-code-auditor
 
-**by [Manoj Verma](https://github.com/manojvermamv)** · [github.com/manojvermamv/continuous-code-auditor](https://github.com/manojvermamv/continuous-code-auditor) · [MIT license](LICENSE)
+[![CI](https://github.com/manojvermamv/continuous-code-auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/manojvermamv/continuous-code-auditor/actions/workflows/ci.yml)
+**v1.0.0** · **by [Manoj Verma](https://github.com/manojvermamv)** · [github.com/manojvermamv/continuous-code-auditor](https://github.com/manojvermamv/continuous-code-auditor) · [MIT license](LICENSE) · [CHANGELOG](CHANGELOG.md) · [ROADMAP](ROADMAP.md)
 
 A continuous, resumable code-audit **Agent Skill**. Conforms to the open [Agent Skills specification](https://agentskills.io/specification), works with several different agent CLIs through a small adapter layer, and audits whatever you point it at — a single file, a set of files, or an entire project directory.
 
@@ -218,6 +219,21 @@ It never modifies the audit target on its own initiative — it produces finding
 ## Adding support for another agent CLI
 
 See [`adapters/README.md`](adapters/README.md) for the full contract. Short version: verify the CLI's real flags yourself, find out how it discovers skills, work out (or rule out) session continuity, write one runner script against `scripts/lib/reliability.sh`'s hooks, document it in `adapters/<cli>.md`, and test it against a mocked binary before trusting it. If it also has a confirmed custom-command mechanism, add `commands/<cli>/` following `commands/README.md`'s pattern.
+
+## Testing & CI
+
+```bash
+bash tests/run_tests.sh                          # integration tests against mocked CLI binaries
+python3 tests/validate_frontmatter.py .           # SKILL.md frontmatter vs. the agentskills.io spec
+python3 tests/check_markdown_links.py .           # internal markdown link check
+shellcheck scripts/**/*.sh installer/install.sh   # if you have shellcheck installed
+```
+
+All four run in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every push and PR. `tests/run_tests.sh` never touches the repo's own `config/`, `work/`, or `logs/` — every run uses a throwaway scratch directory and `AUDITOR_CONFIG` (which every script in this repo respects as a config-path override), cleaned up automatically on exit. See [`tests/README.md`](tests/README.md) for what the mocked tests do and don't prove.
+
+## Stability & versioning
+
+`v1.0.0` marks this as a frozen, stable contract rather than an evolving prototype — see [`CHANGELOG.md`](CHANGELOG.md). Specifically frozen: the adapter hook interface in `scripts/lib/reliability.sh` (`invoke_agent`, `extract_session_id`, `classify_failure`, `agent_specific_preflight`), the structured exit-code table, and the seven operational commands' CLI surface. Breaking changes to any of those bump the major version. Feature ideas that were deliberately deferred to keep this release stable — an adapter capability matrix, feature flags, a normalized finding schema, notification hooks, and more — are tracked in [`ROADMAP.md`](ROADMAP.md) rather than half-built into this one.
 
 ## License
 

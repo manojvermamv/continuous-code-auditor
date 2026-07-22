@@ -7,6 +7,7 @@ metadata:
   audit_domain: general-purpose
   author: Manoj Verma
   repository: https://github.com/manojvermamv/continuous-code-auditor/
+  version: 1.0.0
 ---
 
 # Continuous Code Auditor
