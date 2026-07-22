@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the continuous code auditor every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30sec
+
+[Install]
+WantedBy=timers.target

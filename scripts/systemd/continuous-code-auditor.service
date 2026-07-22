@@ -1,0 +1,29 @@
+[Unit]
+Description=Continuous code auditor (single execution)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/auditor/continuous-code-auditor/scripts/run_auditor.sh
+TimeoutStartSec=240
+
+# --- least-privilege, even when the host is root-administered ---
+User=auditor
+Group=auditor
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+# /srv/your-project itself must be listed here, not just work/ and
+# archives/ — the auditor writes the freshly fetched source back into the
+# project root on every refresh. Under ProtectSystem=strict, anything not
+# listed here is read-only, which would silently break that write.
+#
+# If AGENT_CLI is claude-code / gemini-cli / codex-cli / hermes (native skill
+# auto-discovery), the `auditor` user's home directory also needs to be
+# readable — systemd sets HOME automatically for the User= above, but if
+# skills are installed under that home (e.g. ~/.claude/skills/), make sure
+# ProtectHome (unset here, so default) isn't hiding it. See adapters/<cli>.md.
+ReadWritePaths=/srv/your-project /opt/auditor/logs
+
+# --- resource ceilings ---
+MemoryMax=2G
+CPUQuota=200%

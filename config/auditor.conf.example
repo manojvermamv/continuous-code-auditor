@@ -1,0 +1,55 @@
+# config/auditor.conf.example
+#
+# Copy this file to config/auditor.conf and fill in real values. The
+# installer (installer/install.sh) does this for you and asks the questions
+# interactively; edit by hand if you'd rather not use it.
+#
+# This file is sourced as shell (`source config/auditor.conf`), so quote
+# values that contain spaces and don't put anything here you wouldn't want
+# executed as bash — treat it with the same care as any other script.
+
+# --- Which agent CLI runs this skill ---
+# One of: opencode | claude-code | gemini-cli | codex-cli | hermes
+# See adapters/<value>.md for what each one requires and how it behaves.
+AGENT_CLI="opencode"
+
+# --- Required: the model to run the audit with ---
+# Format depends on the CLI (e.g. "provider/model" for opencode and Claude
+# Code, a bare model name for Gemini CLI, etc.) — see the relevant
+# adapters/<cli>.md for the exact format your CLI expects.
+MODEL_NAME="CHANGE_ME-set-your-model-id"
+
+# --- Required: path to the audited project's root ---
+# This is where work/, archives/, backups/, and (by default) the audit
+# target live (see references/workspace-and-execution.md). Doesn't need to
+# be a git repository.
+PROJECT="/srv/your-project"
+
+# --- What to audit, inside PROJECT ---
+# One of three shapes — see SKILL.md's "Source loading and versioning" and
+# references/workspace-and-execution.md for how each is hashed and archived:
+#   - a single file:   AUDIT_TARGET="BuyerEdgeStrategy.py"
+#   - several files:   AUDIT_TARGET="src/orders.py src/risk.py src/broker.py"
+#   - the whole tree:  AUDIT_TARGET="."
+# Paths are relative to PROJECT unless given as absolute paths.
+AUDIT_TARGET="."
+
+# --- Where the wrapper's own operational files go ---
+# Lock, lock metadata, failure counters, held/paused flags, session id, and
+# the plain-text logs. Does not need to be inside PROJECT.
+LOG_DIR="/opt/auditor/logs"
+
+# --- Wall-clock timeout per execution, in seconds ---
+# Bounds the known "indefinite hang" failure mode some CLIs have documented
+# for upstream rate-limit errors. See references/workspace-and-execution.md
+# "Exit code contract" for how this interacts with the circuit breaker.
+TIMEOUT_SECONDS=240
+
+# --- Consecutive failures before the circuit breaker trips ---
+# See references/consistency-and-safeguards.md §9.
+FAILURE_THRESHOLD=3
+
+# --- Optional: explicit lock file path ---
+# Only change this if you're running more than one independent auditor
+# deployment on the same host and need separate locks.
+# LOCK="/tmp/continuous_code_auditor.lock"

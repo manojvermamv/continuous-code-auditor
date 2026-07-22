@@ -1,0 +1,8 @@
+description = "Create a non-destructive checkpoint of the current audit findings/state under work/archives/."
+prompt = """
+Locate the installed continuous-code-auditor skill directory — check .gemini/skills/continuous-code-auditor/ in this project first, then ~/.gemini/skills/continuous-code-auditor/ — then run:
+
+<that-directory>/scripts/commands/archive.sh {{args}}
+
+via your shell tool, and show me its raw output verbatim. Do not interpret, summarize, paraphrase, or modify what the script prints — this is a deterministic operational command, not something for you to reason about.
+"""
