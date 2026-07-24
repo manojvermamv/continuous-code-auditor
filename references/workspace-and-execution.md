@@ -78,11 +78,15 @@ Making the queues explicit is what makes each execution's behavior deterministic
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "active_task": null,
   "pending_tasks": [],
   "verification_queue": ["F-0012", "F-0019"],
   "deferred_queue": ["F-0031"],
+  "maintenance": {
+    "executions_since_periodic_check": 12,
+    "last_periodic_check_at": "2026-07-18T04:00:00Z"
+  },
   "source": {
     "type": "file",
     "targets": ["BuyerEdgeStrategy.py"],
@@ -94,6 +98,8 @@ Making the queues explicit is what makes each execution's behavior deterministic
   }
 }
 ```
+
+`maintenance` is what turns "every 50 executions or 24 hours" (§6/§8/§11 in `references/consistency-and-safeguards.md`) from something you'd otherwise have to recall across dozens of stateless executions into two numbers you check and update anyway. Increment `executions_since_periodic_check` every run; when it reaches 50, or `last_periodic_check_at` is more than 24 hours in the past, run the periodic checks and reset both fields. Don't estimate or round — this is exactly the kind of arithmetic a long-running, memoryless process should never trust to recollection.
 
 `source.type` is one of `file`, `files`, or `directory`, matching whatever `AUDIT_TARGET` resolved to (see `config/auditor.conf`). `targets` lists the actual path(s) — one entry for `file`, several for `files`, the directory root for `directory`. `combined_sha256` is that file's hash for a single file, or a hash of a sorted manifest (path + per-file hash, one line each) for `files`/`directory` — the point is that any change anywhere in scope changes this value, not that it's individually reversible. `compiles` may be a single boolean or, for `files`/`directory` targets where some files have a checker and others don't, a short per-file map — record what's actually true rather than forcing a single boolean that hides which files were skipped. `archive_path` points at a single-file copy for `file` targets or a tarball for `files`/`directory` targets, in the project's top-level `archives/` (not `work/archives/` — see the directory layout above).
 
@@ -130,7 +136,7 @@ Two lightweight files exist purely so external tooling can check on the auditor 
   "completed_at": "2026-07-18T04:05:00Z",
   "status": "success",
   "source_hash": "…",
-  "schema_version": 3
+  "schema_version": 4
 }
 ```
 
@@ -337,4 +343,28 @@ Running every few minutes forever will otherwise grow `archives/` and log files 
 ### Circuit breaker and alerting
 
 Wire the circuit breaker's `held` state (see `references/consistency-and-safeguards.md` §9) and any `Contradiction-Flagged` finding to a real notification — mail, webhook, whatever's available in your environment. A fully autonomous 24×7 process should not fail silently for days before a person notices; a `held` state with no alert defeats the point of having one.
+
+### Scheduler-liveness watchdog — a different failure mode than the circuit breaker
+
+The circuit breaker only reacts to executions that actually *happen*. If the scheduler itself dies — `systemd` timer gets disabled, the cron daemon stops, the host reboots and the timer never re-enables — no execution ever runs, nothing ever fails, and the circuit breaker stays silent forever. This is a structurally different failure mode and needs a structurally separate check.
+
+`scripts/watchdog.sh` is that check: it reads `work/heartbeat.json`'s age (falling back to `auditor.log`'s mtime) and alerts if it's older than `WATCHDOG_MAX_STALE_MINUTES` (default 30). It's deliberately independent of `scripts/lib/reliability.sh` — it must keep working even if everything else has silently stopped — and must run on its **own** schedule, separate from the main auditor timer, so a dead main scheduler doesn't take the thing watching it down too:
+
+```bash
+sudo systemctl enable --now continuous-code-auditor-watchdog.timer
+```
+
+(see `scripts/systemd/continuous-code-auditor-watchdog.service` / `.timer` — a 10-minute check interval against a 30-minute staleness threshold gives 2-3 missed main-timer ticks of slack before alerting). It correctly treats an intentional pause (`paused.flag`) or an already-alerting circuit breaker (`held.flag`) as expected staleness, not a scheduler failure — it only fires when the auditor should be running and simply isn't.
+
+### Disk-space preflight
+
+A 24×7 process that archives and logs forever will eventually fill a disk if the retention above isn't actually being enforced. Preflight (in `scripts/lib/reliability.sh`, shared by every adapter) checks available space on the filesystem holding `PROJECT` against `MIN_FREE_DISK_MB` (default 100) and refuses to run below it — failing loudly here is much better than failing partway through an atomic write or lock creation.
+
+### Stale-session self-healing
+
+Over a long enough deployment, a stored session id (see each adapter's session-continuity section) can go stale or expire — and every retry then fails the exact same way, indistinguishable from a real persistent failure, right up until it trips the circuit breaker for something a fresh session would have silently fixed. `scripts/lib/reliability.sh` drops the stored session id one failure before the breaker would trip (`FAILURE_THRESHOLD - 1` consecutive failures), giving a clean-slate retry a chance first. This is safe regardless of whether a stale session was actually the cause — session continuity is a cost optimization only, never a correctness dependency (see `adapters/README.md`).
+
+### Cumulative cost ceiling
+
+Distinct from any per-invocation cap an adapter already applies (e.g. Claude Code's own `--max-budget-usd` for a single run — see `adapters/claude-code.md`), `CUMULATIVE_BUDGET_USD` in `config/auditor.conf` caps *lifetime* spend across the whole deployment. Only meaningful for adapters that implement the optional `extract_cost_usd` hook (currently just Claude Code, via its `--output-format json` `total_cost_usd` field) — a no-op for the rest, which is a documented limitation, not a bug. When the running total (`logs/cumulative_cost_usd.txt`) reaches the budget, the auditor pauses itself exactly the way `/continuous-code-auditor-stop` does; clear it the same way, with `/continuous-code-auditor-start`, once you've reviewed spend.
 

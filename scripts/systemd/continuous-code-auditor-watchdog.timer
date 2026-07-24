@@ -1,0 +1,10 @@
+[Unit]
+Description=Run the continuous code auditor watchdog every 10 minutes
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=10min
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

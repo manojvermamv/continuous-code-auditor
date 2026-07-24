@@ -1,0 +1,18 @@
+[Unit]
+Description=Continuous code auditor — scheduler liveness watchdog (single check)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/auditor/continuous-code-auditor/scripts/watchdog.sh
+TimeoutStartSec=60
+
+# Tighter scope than the main service: the watchdog only reads
+# $PROJECT/work/heartbeat.json (read-only is fine under ProtectSystem=strict
+# for paths not listed here) and writes its own watchdog.log — it never
+# fetches, refreshes, or writes anything under $PROJECT itself.
+User=auditor
+Group=auditor
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/auditor/logs

@@ -48,6 +48,15 @@
 #                           ones (binary on PATH, model configured, project
 #                           exists). Should set PREFLIGHT_FAILED="<reason>" and
 #                           return; leave it empty/unset to pass.
+#   extract_cost_usd       - best-effort: read $RUN_OUTPUT and echo this run's
+#                           cost in USD (a bare number, e.g. "0.0142") if the
+#                           CLI reports one, or echo nothing if it doesn't.
+#                           Accumulates into a cumulative spend total this
+#                           library checks against CUMULATIVE_BUDGET_USD (see
+#                           config/auditor.conf.example) — only meaningful for
+#                           adapters that implement it; degrades to "cost
+#                           tracking simply doesn't happen" for the rest,
+#                           which is a documented limitation, not a bug.
 
 set -euo pipefail
 
@@ -61,6 +70,7 @@ FAILURE_COUNT_FILE="$LOG_DIR/consecutive_failures.txt"
 HELD_FLAG="$LOG_DIR/held.flag"
 PAUSED_FLAG="$LOG_DIR/paused.flag"
 SESSION_ID_FILE="$LOG_DIR/${AGENT_NAME:-agent}_session_id.txt"
+COST_TOTAL_FILE="$LOG_DIR/cumulative_cost_usd.txt"
 
 # Structured exit codes — keep in sync with the table in
 # references/workspace-and-execution.md "Exit code contract". These are
@@ -113,6 +123,19 @@ record_failure() {
   local new=$((prev + 1))
   echo "$new" > "$FAILURE_COUNT_FILE"
 
+  # Stale-session self-healing: a session id that's gone stale or expired
+  # over a long-running deployment can otherwise look identical to a real,
+  # persistent failure — every retry keeps failing the same way, and
+  # eventually trips the circuit breaker for something that a fresh session
+  # would have silently fixed. One failure before that trip, drop the stored
+  # session id (if any) and give a plain, no-session retry a chance first.
+  # Cheap and safe either way: session continuity is a cost optimization
+  # only (see adapters/README.md), never a correctness dependency.
+  if [[ "$new" -eq $((FAILURE_THRESHOLD - 1)) && -s "$SESSION_ID_FILE" ]]; then
+    log "note: dropping stored session id before the circuit breaker trips, in case a stale/expired session (not a real failure) is the actual cause — next run starts fresh"
+    rm -f "$SESSION_ID_FILE"
+  fi
+
   if [[ "$new" -ge "$FAILURE_THRESHOLD" ]]; then
     echo "$new consecutive failures as of $(date -Iseconds): $reason" > "$HELD_FLAG"
     alert "circuit breaker tripped after $new consecutive failures ($reason)"
@@ -133,6 +156,7 @@ record_success() {
 extract_session_id() { :; }
 classify_failure() { :; }
 agent_specific_preflight() { :; }
+extract_cost_usd() { :; }
 
 reliability_main() {
   mkdir -p "$LOG_DIR"
@@ -156,6 +180,19 @@ reliability_main() {
     PREFLIGHT_FAILED="PROJECT directory not found at $PROJECT"
   elif [[ ! -f "$SKILL_DIR/SKILL.md" ]]; then
     PREFLIGHT_FAILED="SKILL.md not found under SKILL_DIR ($SKILL_DIR)"
+  elif command -v df >/dev/null 2>&1; then
+    # Disk-space check: a 24/7 process that keeps archiving and logging
+    # forever will eventually hit a full disk if retention (see "Log and
+    # archive retention" in workspace-and-execution.md) isn't actually being
+    # enforced. Fail loudly here rather than limping into a run that then
+    # fails atomic writes or lock creation halfway through. Checks the
+    # filesystem that holds PROJECT (work/archives/backups all live there);
+    # LOG_DIR is often the same filesystem but check it separately if not.
+    local avail_mb
+    avail_mb="$(df -Pm "$PROJECT" 2>/dev/null | awk 'NR==2 {print $4}')"
+    if [[ -n "$avail_mb" && "$avail_mb" -lt "${MIN_FREE_DISK_MB:-100}" ]]; then
+      PREFLIGHT_FAILED="only ${avail_mb}MB free on the filesystem holding PROJECT ($PROJECT) — below MIN_FREE_DISK_MB (${MIN_FREE_DISK_MB:-100}). Free up space or raise the threshold if this is expected."
+    fi
   fi
 
   if [[ -z "$PREFLIGHT_FAILED" ]]; then
@@ -206,6 +243,27 @@ reliability_main() {
     mv -f "$tmp" "$SESSION_ID_FILE"
   else
     log "note: no session id captured this run — either this adapter doesn't track an explicit id (e.g. gemini-cli uses its own resume mechanism instead, see adapters/gemini-cli.md) or extraction didn't find one this time (see the $AGENT_NAME adapter's extract_session_id). Either way, next run just starts fresh rather than continuing a prior conversation — not a failure."
+  fi
+
+  # Cumulative cost tracking (best-effort — only meaningful for adapters that
+  # implement extract_cost_usd; a no-op elsewhere). Checked against
+  # CUMULATIVE_BUDGET_USD so a long-running deployment can't silently run up
+  # an unbounded bill the way an unattended process otherwise could — this is
+  # a lifetime total, distinct from any per-invocation cap an adapter (e.g.
+  # Claude Code's --max-budget-usd) already applies to a single run.
+  if [[ -n "${CUMULATIVE_BUDGET_USD:-}" ]]; then
+    local run_cost total_cost
+    run_cost="$(extract_cost_usd 2>/dev/null || true)"
+    if [[ "$run_cost" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+      total_cost="0"
+      [[ -s "$COST_TOTAL_FILE" ]] && total_cost="$(cat "$COST_TOTAL_FILE")"
+      total_cost="$(awk -v a="$total_cost" -v b="$run_cost" 'BEGIN{printf "%.6f", a+b}')"
+      echo "$total_cost" > "$COST_TOTAL_FILE"
+      if awk -v t="$total_cost" -v b="$CUMULATIVE_BUDGET_USD" 'BEGIN{exit !(t>=b)}'; then
+        echo "cumulative spend \$$total_cost reached/exceeded CUMULATIVE_BUDGET_USD (\$$CUMULATIVE_BUDGET_USD) as of $(date -Iseconds)" > "$PAUSED_FLAG"
+        alert "paused: cumulative spend \$$total_cost reached the configured budget \$$CUMULATIVE_BUDGET_USD"
+      fi
+    fi
   fi
 
   # Let the runner apply any CLI-specific failure classification (e.g. a

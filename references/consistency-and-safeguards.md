@@ -61,12 +61,13 @@ On any run that revisits a finding (verification pass, spot-check, or an unrelat
 
 ## 6. Governance consolidation cadence
 
-Every N executions (default: every 50 runs, or once every 24 hours of wall-clock time, whichever comes first — track the counter in `audit_state.json`):
+Every N executions (default: `audit_state.json`'s `maintenance.executions_since_periodic_check` reaches 50, or `maintenance.last_periodic_check_at` is more than 24 hours ago — whichever comes first; check these two fields directly, don't estimate):
 
 - Review `auditor_governance.md` and `mistake_ledger.json` together.
 - Merge duplicate or overlapping rules into one clearer rule.
 - Fold superseded rules into the broader rule that now covers them — **never delete the substance**, note the fold (e.g. "M-0003 and M-0009 merged into M-0009 on 2026-07-15: both were instances of the same root cause").
 - This is what keeps a 24×7 deployment's self-knowledge from becoming unreadable noise after months of runs — the goal is a ledger that stays *usable*, not just large.
+- Whether or not this pass finds anything worth changing, reset `maintenance.executions_since_periodic_check` to `0` and `maintenance.last_periodic_check_at` to now — this is what §8 and §11 below key off of too, so all three periodic checks run on the same cadence, sharing one counter rather than each tracking its own.
 
 ## 7. Parking uncertain work: `Unresolved-Insufficient-Evidence`
 
@@ -76,7 +77,7 @@ This is not a finding status — it's an internal note (kept in `audit_state.jso
 
 ## 8. Periodic spot re-verification
 
-Independent of the diff-triggered verification in the main flow: every N executions (default 50), re-check a small sample (e.g. 3–5, oldest-verified-first) of already-`Verified-in-code`/`Verified-runtime` findings against the current source, even though nothing specifically prompted it. This catches silent drift — an unrelated later change that quietly invalidates a previously-correct fix. Keep the sample small enough that this never displaces the primary priority order in `SKILL.md`.
+Independent of the diff-triggered verification in the main flow: on the same cadence as §6 (the shared `maintenance` counter in `audit_state.json`), re-check a small sample (e.g. 3–5, oldest-verified-first) of already-`Verified-in-code`/`Verified-runtime` findings against the current source, even though nothing specifically prompted it. This catches silent drift — an unrelated later change that quietly invalidates a previously-correct fix. Keep the sample small enough that this never displaces the primary priority order in `SKILL.md`.
 
 ## 9. Circuit breaker for operational failure
 
@@ -114,7 +115,7 @@ This is also where `Closed-as-intentional` findings and confirmed false positive
 
 ## 11. Periodic full state-integrity reconciliation
 
-The self-consistency check in `references/audit-methodology.md` runs on **every** execution and is intentionally cheap: it checks that the two reports agree, statuses are internally consistent, and evidence points at the active source. This section is different — a deeper, cross-file reconciliation that only needs to run periodically (same cadence as §6 and §8: every 50 executions or every 24 hours, whichever comes first), because it's more expensive and because drift at this level accumulates slowly, not per-run.
+The self-consistency check in `references/audit-methodology.md` runs on **every** execution and is intentionally cheap: it checks that the two reports agree, statuses are internally consistent, and evidence points at the active source. This section is different — a deeper, cross-file reconciliation that only needs to run periodically (same cadence as §6 and §8 — the shared `maintenance` counter in `audit_state.json`), because it's more expensive and because drift at this level accumulates slowly, not per-run.
 
 On the executions where it's due, reconcile rather than trust:
 

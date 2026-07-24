@@ -34,12 +34,22 @@ if command -v systemctl >/dev/null 2>&1; then
       echo "removed the systemd unit files"
     fi
   fi
+  if systemctl list-unit-files 2>/dev/null | grep -q "^continuous-code-auditor-watchdog.timer"; then
+    systemctl disable --now continuous-code-auditor-watchdog.timer 2>/dev/null \
+      && echo "disabled and stopped continuous-code-auditor-watchdog.timer" \
+      || echo "note: could not disable continuous-code-auditor-watchdog.timer (permissions? try with sudo)"
+    if [[ -w /etc/systemd/system ]]; then
+      rm -f /etc/systemd/system/continuous-code-auditor-watchdog.service /etc/systemd/system/continuous-code-auditor-watchdog.timer
+      systemctl daemon-reload 2>/dev/null || true
+      echo "removed the watchdog's systemd unit files"
+    fi
+  fi
 fi
 
 if command -v crontab >/dev/null 2>&1; then
-  if crontab -l 2>/dev/null | grep -qF "$SKILL_DIR/scripts/run_auditor.sh"; then
-    ( crontab -l 2>/dev/null | grep -vF "$SKILL_DIR/scripts/run_auditor.sh" ) | crontab -
-    echo "removed the cron entry for this installation"
+  if crontab -l 2>/dev/null | grep -qE "$SKILL_DIR/scripts/(run_auditor|watchdog)\.sh"; then
+    ( crontab -l 2>/dev/null | grep -vE "$SKILL_DIR/scripts/(run_auditor|watchdog)\.sh" ) | crontab -
+    echo "removed the cron entries for this installation (main auditor and watchdog)"
   fi
 fi
 

@@ -110,6 +110,87 @@ check "codex-cli: turn.failed overrides exit 0 to a failure" "40" "$?"
 write_success_mocks "$BINDIR"
 
 echo
+echo "-- opencode / claude-code: session-id extraction (has(\"session_id\") shape, distinct from codex's .type shape) --"
+write_mock_jq_matching "$BINDIR"
+cat > "$BINDIR/opencode" <<'EOF'
+#!/usr/bin/env bash
+echo '{"type":"message","session_id":"oc-session-9","content":"AUDITOR_EXIT_REASON: success"}'
+exit 0
+EOF
+chmod +x "$BINDIR/opencode"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+write_config "opencode"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "opencode: session id extracted via has(session_id)" "oc-session-9" "$(cat "$LOG_DIR/opencode_session_id.txt" 2>/dev/null || echo MISSING)"
+
+cat > "$BINDIR/claude" <<'EOF'
+#!/usr/bin/env bash
+echo '{"type":"result","session_id":"cc-session-7","total_cost_usd":0.05,"content":"AUDITOR_EXIT_REASON: success"}'
+exit 0
+EOF
+chmod +x "$BINDIR/claude"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+write_config "claude-code"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "claude-code: session id extracted via has(session_id)" "cc-session-7" "$(cat "$LOG_DIR/claude-code_session_id.txt" 2>/dev/null || echo MISSING)"
+
+echo
+echo "-- cumulative cost budget (claude-code reports total_cost_usd; other adapters don't implement this hook) --"
+sed -i "s|^AGENT_CLI=.*|AGENT_CLI=\"claude-code\"|" "$CONFIG"
+echo 'CUMULATIVE_BUDGET_USD=0.12' >> "$CONFIG"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+for i in 1 2 3; do
+  PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+done
+check "cumulative cost 0.15 >= budget 0.12 -> auto-paused" "0" "$([[ -f "$LOG_DIR/paused.flag" ]]; echo $?)"
+check "pause reason mentions budget" "0" "$(grep -qi budget "$LOG_DIR/paused.flag" 2>/dev/null; echo $?)"
+sed -i '/^CUMULATIVE_BUDGET_USD/d' "$CONFIG"
+bash "$SKILL_DIR/scripts/commands/start.sh" >/dev/null 2>&1
+write_success_mocks "$BINDIR"
+
+echo
+echo "-- disk-space preflight --"
+sed -i "s|^AGENT_CLI=.*|AGENT_CLI=\"opencode\"|" "$CONFIG"
+echo 'MIN_FREE_DISK_MB=999999999' >> "$CONFIG"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "impossible disk requirement fails preflight" "15" "$?"
+check "disk failure reason logged" "0" "$(grep -q "MB free" "$LOG_DIR/auditor.log"; echo $?)"
+sed -i '/^MIN_FREE_DISK_MB/d' "$CONFIG"
+
+echo
+echo "-- stale-session self-healing (drops a bad session id before the circuit breaker trips) --"
+write_failure_mocks "$BINDIR"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+echo "some-stale-session-id" > "$LOG_DIR/opencode_session_id.txt"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "session id dropped one failure before the breaker trips" "0" "$([[ ! -f "$LOG_DIR/opencode_session_id.txt" ]]; echo $?)"
+rm -f "$LOG_DIR/held.flag" "$LOG_DIR/consecutive_failures.txt"
+write_success_mocks "$BINDIR"
+
+echo
+echo "-- watchdog: detects a dead scheduler independently of the circuit breaker --"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+bash "$SKILL_DIR/scripts/watchdog.sh"
+check "watchdog: no heartbeat yet -> exit 0 (nothing to check)" "0" "$?"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+bash "$SKILL_DIR/scripts/watchdog.sh"
+check "watchdog: recent execution -> exit 0" "0" "$?"
+STALE_DATE="$(date -d '2 hours ago' +%Y%m%d%H%M 2>/dev/null || date -v-2H +%Y%m%d%H%M 2>/dev/null)"
+[[ -n "$STALE_DATE" ]] && touch -t "$STALE_DATE" "$LOG_DIR/auditor.log"
+echo "WATCHDOG_MAX_STALE_MINUTES=30" >> "$CONFIG"
+bash "$SKILL_DIR/scripts/watchdog.sh"
+check "watchdog: stale execution -> exit 1 (alert)" "1" "$?"
+check "watchdog: alert actually logged" "0" "$(grep -q ALERT "$LOG_DIR/watchdog.log" 2>/dev/null; echo $?)"
+sed -i '/^WATCHDOG_MAX_STALE_MINUTES/d' "$CONFIG"
+bash "$SKILL_DIR/scripts/commands/stop.sh" "test" >/dev/null 2>&1
+bash "$SKILL_DIR/scripts/watchdog.sh"
+check "watchdog: paused -> exit 0 (no false alarm)" "0" "$?"
+bash "$SKILL_DIR/scripts/commands/start.sh" >/dev/null 2>&1
+write_success_mocks "$BINDIR"
+
+echo
 echo "-- preflight, locking, circuit breaker --"
 write_config "opencode"
 rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"

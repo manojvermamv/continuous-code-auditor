@@ -52,6 +52,10 @@ and adjust the `jq` filter in `extract_session_id()` if the id isn't at one of t
 
 No documented "false success" or "stderr is always noisy" quirk was found for this CLI at the time of writing — the runner trusts the exit code (the library's default `classify_failure()`, i.e. no override). Claude Code's own docs note there's no single published global exit-code table, but the general pattern is non-zero on error (hitting `--max-turns`, a stdin overflow, etc.). If you find a specific documented quirk for your version, add a `classify_failure()` override the same way the opencode and Codex CLI adapters do.
 
+## Cost tracking
+
+This is currently the only adapter that implements `extract_cost_usd` — Claude Code's `--output-format json` envelope is documented to include a `total_cost_usd` field. Set `CUMULATIVE_BUDGET_USD` in `config/auditor.conf` to cap lifetime spend across the whole deployment (see `references/workspace-and-execution.md` "Cumulative cost ceiling"); leave it unset to disable tracking. If your version's JSON shape doesn't include this field, the extraction just returns nothing and cost simply isn't tracked — same graceful degradation as any adapter that hasn't implemented the hook at all.
+
 ## Operational commands (/status, /start, /stop, /archive, /backup-everything, /uninstall, /reset)
 
 Native support: `commands/claude-code/*.md` installs as real `.claude/commands/continuous-code-auditor-<name>.md` slash commands (installer/install.sh does this at the same scope you chose for the skill). Each just tells Claude to locate the installed skill and run the matching `scripts/commands/<name>.sh`, relaying output verbatim — see `commands/README.md` for the full table and the `reset` confirmation-gating rule.

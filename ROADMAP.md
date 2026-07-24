@@ -18,7 +18,7 @@ Structured `category` / `subcategory` / `severity` / `confidence` fields on ever
 
 ## 4. State migration framework (`migrations/v1_to_v2.sh`, …)
 
-Once `schema_version` actually needs to bump for the first time (see item 3 as the likely trigger), formalize the migration as a versioned script rather than ad hoc instructions in `SKILL.md`.
+`schema_version` bumped for the first time in `v1.1.0` (3→4, adding the `maintenance` counter — see `CHANGELOG.md`), handled as a documented additive change per `references/workspace-and-execution.md`'s migration guidance rather than a formal migration script, since old fields weren't renamed or removed. The next time a bump requires an actual transformation (not just new fields — see item 3 as the likely trigger for that), formalize it as a versioned script instead of ad hoc instructions in `SKILL.md`.
 
 ## 5. Core engine extraction (split `SKILL.md` further)
 

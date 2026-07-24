@@ -1,7 +1,7 @@
 # continuous-code-auditor
 
 [![CI](https://github.com/manojvermamv/continuous-code-auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/manojvermamv/continuous-code-auditor/actions/workflows/ci.yml)
-**v1.0.0** · **by [Manoj Verma](https://github.com/manojvermamv)** · [github.com/manojvermamv/continuous-code-auditor](https://github.com/manojvermamv/continuous-code-auditor) · [MIT license](LICENSE) · [CHANGELOG](CHANGELOG.md) · [ROADMAP](ROADMAP.md)
+**v1.1.0** · **by [Manoj Verma](https://github.com/manojvermamv)** · [github.com/manojvermamv/continuous-code-auditor](https://github.com/manojvermamv/continuous-code-auditor) · [MIT license](LICENSE) · [CHANGELOG](CHANGELOG.md) · [ROADMAP](ROADMAP.md)
 
 A continuous, resumable code-audit **Agent Skill**. Conforms to the open [Agent Skills specification](https://agentskills.io/specification), works with several different agent CLIs through a small adapter layer, and audits whatever you point it at — a single file, a set of files, or an entire project directory.
 
@@ -210,9 +210,14 @@ It never modifies the audit target on its own initiative — it produces finding
 
 - **Locking with metadata** — `flock` plus a companion file recording who holds it (PID, host, start time), so a stuck run is diagnosable, not a mystery.
 - **Circuit breaker** — after 3 consecutive operational failures, the auditor stops and holds rather than retrying forever.
+- **Scheduler-liveness watchdog** — a structurally separate check (`scripts/watchdog.sh`, its own systemd timer) for the failure mode the circuit breaker *can't* see: the scheduler itself dying silently, so no execution — and therefore no failure, and therefore no alert — ever happens at all.
+- **Stale-session self-healing** — a session id that's gone stale over a long deployment gets dropped one failure before the circuit breaker would trip, rather than treated as a persistent failure needing operator intervention.
+- **Disk-space preflight** — refuses to start a run if the filesystem holding `PROJECT` is critically low, rather than failing partway through an archive or lock.
+- **Cumulative cost ceiling** — an optional lifetime spend cap (`CUMULATIVE_BUDGET_USD`), distinct from any adapter's per-invocation cap, for CLIs that report cost.
 - **Pause/resume** — `/continuous-code-auditor-stop` and `/continuous-code-auditor-start` (or the underlying scripts) let a human intentionally halt scheduled runs, independent of the circuit breaker.
 - **Structured exit codes** (`0`/`10`/`12`/`13`/`15`/`20`/`30`/`40`/`50`/`1`) — so external monitoring can tell success from a lock conflict from a pause from a held breaker from a compile failure, without parsing logs. Full table in `references/workspace-and-execution.md`.
 - **Atomic writes** — every workspace state file is written via temp-file-then-rename, so a mid-write kill leaves the previous complete version intact, never a torn file.
+- **Deterministic maintenance cadence** — periodic upkeep (log rotation, governance consolidation, spot-checks) is keyed off real counters in `audit_state.json`, not the model's recollection of "roughly every 50 runs" across months of stateless executions.
 - **Prior-failure carry-forward** — a failed run's error is fed into the next run's context.
 - **Evidence rubric, speculation trip-wire, contradiction detection, mistake ledger, negative-knowledge registry** — the actual anti-hallucination mechanics, detailed in `references/consistency-and-safeguards.md`.
 

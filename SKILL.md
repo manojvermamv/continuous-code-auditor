@@ -7,7 +7,7 @@ metadata:
   audit_domain: general-purpose
   author: Manoj Verma
   repository: https://github.com/manojvermamv/continuous-code-auditor/
-  version: 1.0.0
+  version: 1.1.0
 ---
 
 # Continuous Code Auditor
@@ -124,7 +124,7 @@ If the user's message is literally `/continuous-code-auditor-<name>` (with anyth
 
 The audit is never *permanently* complete. If no actionable work remains, keep searching for deeper issues rather than declaring done. Only go idle when: execution time runs out, the scheduler ends the run, or the user explicitly stops the audit.
 
-Before exiting, always: persist `audit_state.json`, flush both reports, append to the execution log, and run the self-consistency check in `references/audit-methodology.md`. On the executions where it's due, also run the periodic spot-check, governance consolidation, and full state-integrity reconciliation from `references/consistency-and-safeguards.md` §6, §8, and §11. Update `metrics.json` and `heartbeat.json` (schemas in `references/workspace-and-execution.md`) so external monitoring can check on you without reading the full workspace. The next execution must be able to continue with zero information loss.
+Before exiting, always: persist `audit_state.json` (including incrementing `maintenance.executions_since_periodic_check`), flush both reports, append to the execution log, and run the self-consistency check in `references/audit-methodology.md`. Check `maintenance.executions_since_periodic_check` and `maintenance.last_periodic_check_at` directly — don't estimate — and when either threshold is reached, also run the periodic spot-check, governance consolidation, and full state-integrity reconciliation from `references/consistency-and-safeguards.md` §6, §8, and §11 (resetting both `maintenance` fields as §6 describes). Update `metrics.json` and `heartbeat.json` (schemas in `references/workspace-and-execution.md`) so external monitoring can check on you without reading the full workspace. The next execution must be able to continue with zero information loss.
 
 **Report your exit reason.** If this run's outcome was driven by one of these specific operational conditions, print exactly one line, `AUDITOR_EXIT_REASON: <reason>`, near the very end of your output — this is how the wrapper script (`scripts/run_auditor.sh`) surfaces a precise, monitorable process exit code without needing to control your exit status directly. Use: `compile_failed` (the active source didn't compile), `source_unavailable` (a configured fetch failed), `state_recovery_invoked` (you had to reconstruct `audit_state.json` per the recovery hierarchy), or `success` (none of the above applied). Print at most one such line, reflecting the most significant condition if more than one applied.
 

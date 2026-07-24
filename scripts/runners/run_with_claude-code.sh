@@ -87,6 +87,15 @@ extract_session_id() {
   ' "$RUN_OUTPUT" 2>/dev/null | head -n1
 }
 
+extract_cost_usd() {
+  # total_cost_usd is documented as part of Claude Code's --output-format
+  # json envelope. Confirmed field name (unlike the session id above) — if
+  # your version's output differs, this just fails to match and cost
+  # tracking degrades to "not tracked" for this run, same as any adapter
+  # that hasn't implemented this hook at all.
+  jq -r '.. | objects | select(has("total_cost_usd")) | .total_cost_usd' "$RUN_OUTPUT" 2>/dev/null | head -n1
+}
+
 # No documented "false success" or "stderr is always noisy" quirk found for
 # this CLI at time of writing — trust the exit code (the library default).
 # If you find otherwise for your version, override classify_failure() here.

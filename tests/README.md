@@ -24,6 +24,8 @@ shellcheck scripts/lib/*.sh scripts/runners/*.sh scripts/commands/*.sh scripts/*
 
 `tests/lib/mock_bins.sh` provides fake `opencode`/`claude`/`gemini`/`codex`/`hermes`/`jq` binaries — enough to exercise this repo's own bash logic (dispatch, config loading, locking, the circuit breaker, exit-code mapping, the operational commands) in complete isolation from any real agent CLI or model. **This is not a substitute for testing against the real CLIs** — see `adapters/README.md` point 7. Every adapter's actual flags were checked against real `--help` output or official docs when written; the mocked tests only prove this repo's side of the contract holds, not that a given CLI version still honors the flags an adapter assumes.
 
+The mock `jq` (`write_mock_jq_matching`) evaluates both filter shapes this project's adapters actually use — `select(.type == "X")` (Codex CLI) and `select(has("field"))` (opencode, Claude Code, and the cost-extraction hook) — with recursive descent through nested JSON. An earlier version only handled the first shape, which meant the has(...) code paths were silently never exercised at all despite the suite reporting green; if you add a filter shape no adapter has used yet, extend the mock rather than assuming it'll "probably still work" — that exact assumption was wrong once already in this project's own history.
+
 `tests/run_tests.sh` uses `AUDITOR_CONFIG` (every script in this repo respects this env var as an override for `config/auditor.conf`'s path) plus a throwaway `$HOME` and workspace under `mktemp -d`, cleaned up on exit regardless of pass/fail — it never touches the repo's own `config/auditor.conf` or reads/writes outside its own scratch directory.
 
 ## Adding a test for a new adapter

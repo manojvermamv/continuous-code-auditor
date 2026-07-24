@@ -49,6 +49,35 @@ TIMEOUT_SECONDS=240
 # See references/consistency-and-safeguards.md §9.
 FAILURE_THRESHOLD=3
 
+# --- Minimum free disk space (MB) on the filesystem holding PROJECT ---
+# Preflight refuses to run below this. A 24/7 process that archives and logs
+# forever will eventually fill a disk if retention isn't actually enforced —
+# this catches it before a run fails partway through an atomic write or lock
+# creation instead. Raise it if 100MB is tight for your archive/backup volume.
+MIN_FREE_DISK_MB=100
+
+# --- Optional: cumulative lifetime spend cap, in USD ---
+# Only meaningful for adapters that implement the extract_cost_usd hook
+# (currently: Claude Code, via its --output-format json total_cost_usd field
+# — see adapters/claude-code.md). Leave unset/empty to disable cost tracking
+# entirely. This is a LIFETIME total across the whole deployment, distinct
+# from any per-invocation cap an adapter already applies (e.g. Claude Code's
+# own --max-budget-usd for a single run). When reached, the auditor pauses
+# itself the same way /continuous-code-auditor-stop does — clear it with
+# /continuous-code-auditor-start once you've reviewed spend, and reset the
+# running total by clearing logs/cumulative_cost_usd.txt if you want to.
+# CUMULATIVE_BUDGET_USD=50.00
+
+# --- Watchdog: how stale (minutes) before the scheduler itself is presumed
+# dead, not just an execution having failed ---
+# See scripts/watchdog.sh and its own systemd timer/cron entry — it runs
+# independently of everything above and alerts if no execution has happened
+# at all in this many minutes, which the circuit breaker structurally can't
+# detect (it only reacts to executions that actually run). Set this higher
+# than a few missed ticks of your schedule interval to avoid false alarms —
+# the default (30) assumes a 5-minute main schedule.
+WATCHDOG_MAX_STALE_MINUTES=30
+
 # --- Optional: explicit lock file path ---
 # Only change this if you're running more than one independent auditor
 # deployment on the same host and need separate locks.

@@ -223,27 +223,39 @@ case "$SCHEDULE" in
   systemd)
     if [[ "$EUID" -ne 0 ]]; then
       echo "Installing systemd units requires root — re-run this installer with sudo, or install them yourself:"
-      echo "  $SKILL_DIR/scripts/systemd/continuous-code-auditor.service -> /etc/systemd/system/"
-      echo "  $SKILL_DIR/scripts/systemd/continuous-code-auditor.timer   -> /etc/systemd/system/"
-      echo "Edit ExecStart to point at $SKILL_DIR/scripts/run_auditor.sh first."
+      echo "  $SKILL_DIR/scripts/systemd/continuous-code-auditor.service          -> /etc/systemd/system/"
+      echo "  $SKILL_DIR/scripts/systemd/continuous-code-auditor.timer            -> /etc/systemd/system/"
+      echo "  $SKILL_DIR/scripts/systemd/continuous-code-auditor-watchdog.service -> /etc/systemd/system/"
+      echo "  $SKILL_DIR/scripts/systemd/continuous-code-auditor-watchdog.timer   -> /etc/systemd/system/"
+      echo "Edit ExecStart in both .service files to point at $SKILL_DIR first."
     else
       sed "s|/opt/auditor/continuous-code-auditor|$SKILL_DIR|g" \
         "$SKILL_DIR/scripts/systemd/continuous-code-auditor.service" > /etc/systemd/system/continuous-code-auditor.service
       cp "$SKILL_DIR/scripts/systemd/continuous-code-auditor.timer" /etc/systemd/system/continuous-code-auditor.timer
+      sed "s|/opt/auditor/continuous-code-auditor|$SKILL_DIR|g" \
+        "$SKILL_DIR/scripts/systemd/continuous-code-auditor-watchdog.service" > /etc/systemd/system/continuous-code-auditor-watchdog.service
+      cp "$SKILL_DIR/scripts/systemd/continuous-code-auditor-watchdog.timer" /etc/systemd/system/continuous-code-auditor-watchdog.timer
       systemctl daemon-reload
       systemctl enable --now continuous-code-auditor.timer
-      echo "installed and enabled continuous-code-auditor.timer"
+      systemctl enable --now continuous-code-auditor-watchdog.timer
+      echo "installed and enabled continuous-code-auditor.timer and continuous-code-auditor-watchdog.timer"
+      echo "the watchdog runs independently — see references/workspace-and-execution.md 'Scheduler-liveness watchdog' for why it's a separate unit, not part of the main one."
       echo "review /etc/systemd/system/continuous-code-auditor.service — the User=auditor account must exist and be able to read $SKILL_DIR and write $PROJECT and $LOG_DIR."
     fi
     ;;
   cron)
     CRON_LINE="*/5 * * * * $SKILL_DIR/scripts/run_auditor.sh >> $LOG_DIR/cron.log 2>&1"
-    ( crontab -l 2>/dev/null | grep -vF "$SKILL_DIR/scripts/run_auditor.sh" ; echo "$CRON_LINE" ) | crontab -
-    echo "installed cron entry: $CRON_LINE"
+    WATCHDOG_CRON_LINE="*/10 * * * * $SKILL_DIR/scripts/watchdog.sh"
+    ( crontab -l 2>/dev/null | grep -vF "$SKILL_DIR/scripts/run_auditor.sh" | grep -vF "$SKILL_DIR/scripts/watchdog.sh" ; echo "$CRON_LINE" ; echo "$WATCHDOG_CRON_LINE" ) | crontab -
+    echo "installed cron entries:"
+    echo "  $CRON_LINE"
+    echo "  $WATCHDOG_CRON_LINE"
+    echo "the watchdog runs independently of the main entry — see references/workspace-and-execution.md 'Scheduler-liveness watchdog'."
     ;;
   none)
     echo "Skipping scheduler setup. Point your scheduler of choice at:"
-    echo "  $SKILL_DIR/scripts/run_auditor.sh"
+    echo "  $SKILL_DIR/scripts/run_auditor.sh   (the audit itself)"
+    echo "  $SKILL_DIR/scripts/watchdog.sh      (detects a dead scheduler — run this on a SEPARATE schedule, see references/workspace-and-execution.md)"
     ;;
 esac
 

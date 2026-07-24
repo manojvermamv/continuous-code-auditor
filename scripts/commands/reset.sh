@@ -74,11 +74,15 @@ done
 # corruption needing the recovery hierarchy in references/workspace-and-execution.md.
 cat > "$PROJECT/work/audit_state.json" <<JSON
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "active_task": null,
   "pending_tasks": [],
   "verification_queue": [],
-  "deferred_queue": []
+  "deferred_queue": [],
+  "maintenance": {
+    "executions_since_periodic_check": 0,
+    "last_periodic_check_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  }
 }
 JSON
 
