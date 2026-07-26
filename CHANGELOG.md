@@ -2,6 +2,15 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] — security patch: path traversal in labeled commands
+
+Found during architecture research on comparable open-source projects — one of them (agentmemory) has a public, numbered security-advisory history, and incident #5 in that history is a path-traversal bug in an export feature via an unsanitized user-supplied argument. That prompted checking our own commands for the same bug class. They had it.
+
+### Fixed
+- **`scripts/commands/archive.sh` and `scripts/commands/backup-everything.sh`** both took an optional `LABEL` argument and used it, unsanitized, to build a filesystem path. Confirmed exploitable before this fix: `archive.sh "../../../../tmp/x"` wrote outside `work/archives/` entirely, landing at `$PROJECT/tmp/x`. Both now sanitize the label (`scripts/commands/_common.sh`'s new `sanitize_label()`) to alphanumeric/hyphen/underscore only before it touches a path. Normal usage (a plain label like `"before-refactor"`) is unaffected. Added a permanent regression test (`tests/run_tests.sh`) so this can't silently reappear.
+
+No other command takes a user-supplied argument that reaches a filesystem path (`reset.sh` and `uninstall.sh` only accept fixed flags), so this was confirmed to be the only place with this bug class.
+
 ## [1.1.0] — long-running reliability upgrades
 
 Prompted by a direct question: given this is meant to run unattended for months, what's actually still missing? Five gaps were verified against the code (not assumed) and closed. All additive — nothing in the frozen `v1.0.0` contract (adapter hook signatures, exit codes, operational commands) changed shape; one new optional hook was added.

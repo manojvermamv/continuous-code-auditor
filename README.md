@@ -1,7 +1,7 @@
 # continuous-code-auditor
 
 [![CI](https://github.com/manojvermamv/continuous-code-auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/manojvermamv/continuous-code-auditor/actions/workflows/ci.yml)
-**v1.1.0** · **by [Manoj Verma](https://github.com/manojvermamv)** · [github.com/manojvermamv/continuous-code-auditor](https://github.com/manojvermamv/continuous-code-auditor) · [MIT license](LICENSE) · [CHANGELOG](CHANGELOG.md) · [ROADMAP](ROADMAP.md)
+**v1.1.1** · **by [Manoj Verma](https://github.com/manojvermamv)** · [github.com/manojvermamv/continuous-code-auditor](https://github.com/manojvermamv/continuous-code-auditor) · [MIT license](LICENSE) · [CHANGELOG](CHANGELOG.md) · [ROADMAP](ROADMAP.md)
 
 A continuous, resumable code-audit **Agent Skill**. Conforms to the open [Agent Skills specification](https://agentskills.io/specification), works with several different agent CLIs through a small adapter layer, and audits whatever you point it at — a single file, a set of files, or an entire project directory.
 
@@ -20,6 +20,27 @@ Point-in-time code reviews go stale the moment the code changes again. This skil
 - **It has an operational control surface, not just an audit loop.** `status`, `start`, `stop`, `archive`, `backup-everything`, `uninstall`, and `reset` are real commands — native slash commands where the CLI supports it, and always available as plain scripts otherwise.
 
 ## Architecture at a glance
+
+The simplest way to see it, top to bottom:
+
+```
+Scheduler (systemd timer / cron)
+        │
+        ▼
+scripts/run_auditor.sh        (dispatcher — reads config/auditor.conf)
+        │
+        ▼
+scripts/runners/run_with_<cli>.sh   (the adapter — CLI-specific invocation)
+        │
+        ▼
+Your configured agent CLI      (opencode / Claude Code / Gemini CLI / Codex CLI / Hermes)
+        │
+        ▼
+SKILL.md                       (the instructions the agent follows)
+        │
+        ▼
+Workspace (work/, archives/)   (state, findings, reports — read and written each run)
+```
 
 Two things that are easy to conflate but aren't the same thing:
 
@@ -238,7 +259,7 @@ All four run in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every 
 
 ## Stability & versioning
 
-`v1.0.0` marks this as a frozen, stable contract rather than an evolving prototype — see [`CHANGELOG.md`](CHANGELOG.md). Specifically frozen: the adapter hook interface in `scripts/lib/reliability.sh` (`invoke_agent`, `extract_session_id`, `classify_failure`, `agent_specific_preflight`), the structured exit-code table, and the seven operational commands' CLI surface. Breaking changes to any of those bump the major version. Feature ideas that were deliberately deferred to keep this release stable — an adapter capability matrix, feature flags, a normalized finding schema, notification hooks, and more — are tracked in [`ROADMAP.md`](ROADMAP.md) rather than half-built into this one.
+`v1.0.0`/`v1.1.0` mark this as a frozen, stable contract rather than an evolving prototype — see [`CHANGELOG.md`](CHANGELOG.md). Specifically frozen: the adapter hook interface in `scripts/lib/reliability.sh` (`invoke_agent`, `extract_session_id`, `classify_failure`, `agent_specific_preflight`, `extract_cost_usd`), the structured exit-code table, and the seven operational commands' CLI surface. Breaking changes to any of those bump the major version. The biggest deferred idea — generalizing beyond code auditing into a domain-agnostic auditing framework (security, docs, infra, compliance, …) — turns out to need less engine rework than it sounds like, since the reliability engine already has almost zero code-specific coupling; it's still a deliberate v2.0.0-scale identity decision, not a quick add. That and everything else deferred to keep this release stable are tracked in [`ROADMAP.md`](ROADMAP.md) rather than half-built into this one.
 
 ## License
 

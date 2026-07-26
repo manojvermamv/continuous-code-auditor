@@ -27,3 +27,15 @@ HELD_FLAG="$LOG_DIR/held.flag"
 PAUSED_FLAG="$LOG_DIR/paused.flag"
 
 mkdir -p "$LOG_DIR" "$PROJECT/work" "$PROJECT/archives" "$PROJECT/backups"
+
+sanitize_label() {
+  # Strips anything that isn't alphanumeric/hyphen/underscore from a
+  # user-supplied label before it's used to build a filesystem path (see
+  # archive.sh and backup-everything.sh). Defends against path traversal
+  # (../, an absolute path, a leading /) — found during a security review
+  # prompted by a comparable project's own documented incident of exactly
+  # this bug class in an export feature. Confirmed exploitable here before
+  # this fix: a label of "../../../../tmp/x" made archive.sh write outside
+  # work/archives/ entirely.
+  printf '%s' "$1" | tr -cd 'A-Za-z0-9_-'
+}

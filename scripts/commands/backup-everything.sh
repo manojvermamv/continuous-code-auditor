@@ -15,7 +15,10 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-LABEL="${1:-}"
+LABEL="$(sanitize_label "${1:-}")"
+if [[ -n "${1:-}" && -z "$LABEL" ]]; then
+  echo "note: the given label had no safe characters (alphanumeric/hyphen/underscore only) — proceeding without one"
+fi
 TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 NAME="continuous-code-auditor-backup-${TIMESTAMP}"
 [[ -n "$LABEL" ]] && NAME="${NAME}-${LABEL}"

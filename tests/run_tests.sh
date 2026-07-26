@@ -246,6 +246,17 @@ bash "$SKILL_DIR/scripts/commands/backup-everything.sh" >/dev/null 2>&1
 BACKUP_COUNT=$(find "$PROJECT/backups" -name "*.tar.gz" 2>/dev/null | wc -l | tr -d ' ')
 [[ "$BACKUP_COUNT" -ge 1 ]]; check "backup-everything: tarball created" "0" "$?"
 
+echo
+echo "-- path-traversal regression (CVE-class fix, v1.1.1): a malicious label must not escape its intended directory --"
+rm -rf "$TMP_ROOT/escape-check"
+bash "$SKILL_DIR/scripts/commands/archive.sh" "../../../../tmp/escape-check" >/dev/null 2>&1
+[[ ! -e "$TMP_ROOT/escape-check" && ! -d "$PROJECT/tmp" ]]
+check "archive.sh: path-traversal label is contained (does not escape work/archives/)" "0" "$?"
+
+bash "$SKILL_DIR/scripts/commands/backup-everything.sh" "../../../../tmp/escape-check-2" >/dev/null 2>&1
+[[ ! -e "$TMP_ROOT/escape-check-2" ]]
+check "backup-everything.sh: path-traversal label is contained (does not escape backups/)" "0" "$?"
+
 bash "$SKILL_DIR/scripts/commands/reset.sh" </dev/null >/dev/null 2>&1
 check "reset: refuses without --confirm" "1" "$?"
 
