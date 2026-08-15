@@ -62,7 +62,13 @@ shopt -u nullglob dotglob
 
 # Move the wrapper's own operational state — but not the lock file, which is
 # an active concurrency primitive, not session history.
-for f in auditor.log cron.log last_failure.txt consecutive_failures.txt held.flag paused.flag; do
+#
+# cumulative_cost_usd.txt is included deliberately: a reset starts a new
+# session, and CUMULATIVE_BUDGET_USD is a per-session ceiling — carrying the
+# old total forward would let a fresh session get auto-paused on spend it
+# never incurred. The old total is preserved in the snapshot either way, so
+# nothing is lost if you want to add it back up across sessions.
+for f in auditor.log cron.log watchdog.log last_failure.txt consecutive_failures.txt held.flag paused.flag cumulative_cost_usd.txt; do
   [[ -f "$LOG_DIR/$f" ]] && mv "$LOG_DIR/$f" "$SNAPSHOT_DIR/logs/"
 done
 for f in "$LOG_DIR"/*_session_id.txt; do

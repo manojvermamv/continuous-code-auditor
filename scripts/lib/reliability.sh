@@ -72,6 +72,34 @@ PAUSED_FLAG="$LOG_DIR/paused.flag"
 SESSION_ID_FILE="$LOG_DIR/${AGENT_NAME:-agent}_session_id.txt"
 COST_TOTAL_FILE="$LOG_DIR/cumulative_cost_usd.txt"
 
+# Default here rather than in each runner, so every adapter gets the same
+# fallback and none can forget it (it's referenced under `set -u`).
+AUDIT_TARGET="${AUDIT_TARGET:-.}"
+
+# Shared context block appended to every adapter's message.
+#
+# SKILL.md instructs the model to determine the audit target before doing
+# anything — but it cannot reliably locate config/auditor.conf on its own:
+# the runners cd into $PROJECT, while the config lives under $SKILL_DIR, and
+# for adapters that attach SKILL.md directly (opencode) the model never sees
+# the surrounding skill directory at all. Passing these explicitly in the
+# message is the only mechanism that works identically across all five
+# adapters. Centralized here rather than copy-pasted into five build_message()
+# functions specifically so it can't drift between them.
+auditor_context_block() {
+  local block
+  block="AUDIT_CONTEXT (authoritative for this run — use these, don't infer them):
+  PROJECT=$PROJECT
+  AUDIT_TARGET=$AUDIT_TARGET
+  SKILL_DIR=$SKILL_DIR
+  AUDITOR_VERSION=$AUDITOR_VERSION"
+  if [[ -n "${PRIOR_FAILURE_NOTE:-}" ]]; then
+    block="$block
+  PRIOR_RUN_FAILURE_NOTE: $PRIOR_FAILURE_NOTE"
+  fi
+  printf '%s' "$block"
+}
+
 # Structured exit codes — keep in sync with the table in
 # references/workspace-and-execution.md "Exit code contract". These are
 # identical across every CLI adapter; only how code 20/30/50 get *detected*
@@ -80,6 +108,7 @@ EXIT_SUCCESS=0
 EXIT_LOCK_HELD=10
 EXIT_CIRCUIT_BREAKER_HELD=12
 EXIT_PAUSED=13
+EXIT_RESOURCE_DEFERRED=14
 EXIT_PREFLIGHT_FAILED=15
 EXIT_COMPILE_FAILED=20
 EXIT_SOURCE_UNAVAILABLE=30
@@ -101,21 +130,186 @@ _reliability_cleanup() {
 }
 trap _reliability_cleanup EXIT
 
+# Skill version, read from SKILL.md's frontmatter — single source of truth,
+# so a version bump can't drift out of sync with what the logs and workspace
+# record. Falls back to "unknown" rather than failing: an unreadable version
+# is a cosmetic problem, never a reason to block an audit.
+AUDITOR_VERSION="$(grep -m1 -oE '^[[:space:]]*version:[[:space:]]*[0-9]+\.[0-9]+\.[0-9]+' "$SKILL_DIR/SKILL.md" 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)"
+AUDITOR_VERSION="${AUDITOR_VERSION:-unknown}"
+
+# _json_escape <string> — minimal escaping for JSON string values.
+_json_escape() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr -d '\000-\037'
+}
+
+# log <message> [event-type]
+#
+# Writes the human-readable line as before, and — when LOG_FORMAT includes
+# json — a matching JSON Lines record to auditor.jsonl. Both are written;
+# the structured file is additive, never a replacement, so anything already
+# tailing auditor.log keeps working unchanged.
+#
+# The version stamp is on every record deliberately: when a months-old
+# deployment behaves oddly, the first question is which version produced
+# that line, and reconstructing it from timestamps against a changelog is
+# exactly the kind of forensics an audit trail should make unnecessary.
 log() {
+  local msg="$1" event="${2:-info}"
   mkdir -p "$LOG_DIR"
-  echo "$(date -Iseconds) [$AGENT_NAME] $1" >> "$LOG_DIR/auditor.log"
+  echo "$(date -Iseconds) [$AGENT_NAME] ($AUDITOR_VERSION) $msg" >> "$LOG_DIR/auditor.log"
+
+  case "${LOG_FORMAT:-text}" in
+    *json*)
+      printf '{"ts":"%s","version":"%s","agent":"%s","event":"%s","project":"%s","message":"%s"}\n' \
+        "$(date -Iseconds)" \
+        "$(_json_escape "$AUDITOR_VERSION")" \
+        "$(_json_escape "$AGENT_NAME")" \
+        "$(_json_escape "$event")" \
+        "$(_json_escape "${PROJECT:-}")" \
+        "$(_json_escape "$msg")" \
+        >> "$LOG_DIR/auditor.jsonl"
+      ;;
+  esac
+}
+
+# Retention enforcement.
+#
+# references/workspace-and-execution.md has documented a retention policy
+# since v1.0.0, but nothing ever implemented it — archives/ and
+# execution_log.md grew without bound. On a system whose entire premise is
+# running unattended for months, that is a *guaranteed* eventual outage:
+# disk fills, MIN_FREE_DISK_MB trips a hard preflight failure (15), three of
+# those trip the circuit breaker, and the deployment stops until a human
+# intervenes. Documenting a policy nobody enforces is worse than having none,
+# because it reads as handled.
+#
+# Runs before preflight so it can free space *before* the disk gate is
+# evaluated. Deliberately conservative — see the evidence guard below.
+enforce_retention() {
+  # Two independent concerns. An early `return` for one must never skip the
+  # other — an earlier draft of this function returned when archives/ didn't
+  # exist yet, which silently disabled log rotation on exactly the fresh
+  # deployments that run longest before anyone looks.
+  _prune_source_archives
+  _rotate_execution_log
+}
+
+_prune_source_archives() {
+  local keep="${ARCHIVE_RETENTION_COUNT:-50}"
+  [[ "$keep" -le 0 ]] && return 0          # 0 or negative disables retention
+  local archive_dir="$PROJECT/archives"
+  [[ -d "$archive_dir" ]] || return 0
+
+  local register="$PROJECT/work/continuous_code_audit_findings.md"
+  local pruned=0 candidate base
+
+  # Oldest first, skipping the newest $keep.
+  while IFS= read -r candidate; do
+    base="$(basename "$candidate")"
+
+    # Evidence guard: never delete an archive the findings register still
+    # cites. A finding whose evidence has been deleted is unverifiable, and
+    # an unverifiable finding is worse than a large disk — this is exactly
+    # the "never delete an archive still cited by an unresolved finding"
+    # rule from references/workspace-and-execution.md, enforced rather than
+    # merely stated.
+    if [[ -f "$register" ]] && grep -qF "$base" "$register" 2>/dev/null; then
+      continue
+    fi
+
+    rm -f "$candidate" && pruned=$((pruned + 1))
+  done < <(find "$archive_dir" -maxdepth 1 -type f -name 'source_*' -printf '%T@ %p\n' 2>/dev/null \
+             | sort -n | head -n -"$keep" | cut -d' ' -f2-)
+
+  [[ "$pruned" -gt 0 ]] && log "retention: pruned $pruned old source archive(s), keeping the newest $keep (archives cited by the findings register are never pruned)"
+  return 0
+}
+
+_rotate_execution_log() {
+  # execution_log.md rotation. Append-only is a correctness property (never
+  # rewrite history), so this ROTATES rather than truncates: the old content
+  # moves to logs/execution_log_archive/ intact.
+  local exec_log="$PROJECT/work/execution_log.md"
+  local max_lines="${EXECUTION_LOG_MAX_LINES:-5000}"
+  if [[ "$max_lines" -gt 0 && -f "$exec_log" ]]; then
+    local lines
+    lines="$(wc -l < "$exec_log" 2>/dev/null || echo 0)"
+    if [[ "$lines" -gt "$max_lines" ]]; then
+      local arc_dir="$LOG_DIR/execution_log_archive"
+      mkdir -p "$arc_dir"
+      local stamp keep_lines tmp
+      stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+      keep_lines=$((max_lines / 2))
+      # Archive everything, then keep the most recent half — so the active
+      # log stays useful for "what was I doing previously?" while the full
+      # history survives on disk.
+      cp "$exec_log" "$arc_dir/execution_log_$stamp.md"
+      tmp="$(mktemp)"
+      tail -n "$keep_lines" "$exec_log" > "$tmp"
+      mv -f "$tmp" "$exec_log"
+      log "retention: rotated execution_log.md ($lines lines) to $arc_dir/execution_log_$stamp.md, kept the most recent $keep_lines"
+    fi
+  fi
+  return 0
 }
 
 alert() {
   # --- replace with your actual notification channel (mail, webhook, etc.) ---
   # A held circuit breaker (or a preflight failure) with no alert defeats the
   # point of having one.
-  log "ALERT: $1"
+  log "ALERT: $1" "alert"
+}
+
+# Load gate — refuses to start a run while the host is under genuine
+# resource pressure.
+#
+# Deliberately a DEFERRAL, not a failure, and this distinction is the whole
+# point of the design: a full disk needs a human, but high load clears
+# itself. If overload were treated as a failure, three busy scheduler ticks
+# would trip the circuit breaker and require manual intervention for a
+# condition that would have resolved on its own within minutes. So this
+# returns EXIT_RESOURCE_DEFERRED (14) and never calls record_failure —
+# grouped with lock-held (10) and paused (13) as an informational skip, not
+# with the 15+ failures. The disk check stays in preflight as a hard failure
+# for exactly the opposite reason.
+#
+# Both thresholds are optional. Set MAX_LOAD_PER_CPU="" to disable the load
+# gate; MIN_FREE_MEM_MB is unset (disabled) by default, since what counts as
+# "low" memory varies far more between deployments than load does.
+#
+# Sets RESOURCE_DEFER_REASON when the run should be skipped.
+resource_gate() {
+  RESOURCE_DEFER_REASON=""
+
+  local max_load="${MAX_LOAD_PER_CPU:-4.0}"
+  if [[ -n "$max_load" && -r /proc/loadavg ]]; then
+    local load1 cpus threshold
+    load1="$(awk '{print $1}' /proc/loadavg 2>/dev/null)"
+    cpus="$(nproc 2>/dev/null || echo 1)"
+    [[ "$cpus" -lt 1 ]] && cpus=1
+    threshold="$(awk -v m="$max_load" -v c="$cpus" 'BEGIN{printf "%.2f", m*c}')"
+    if [[ -n "$load1" ]] && awk -v l="$load1" -v t="$threshold" 'BEGIN{exit !(l>t)}'; then
+      RESOURCE_DEFER_REASON="1-minute load average $load1 exceeds ${threshold} (MAX_LOAD_PER_CPU=${max_load} x ${cpus} cpu(s))"
+      return
+    fi
+  fi
+
+  if [[ -n "${MIN_FREE_MEM_MB:-}" && -r /proc/meminfo ]]; then
+    local avail_mem_mb
+    # MemAvailable is the right field here, not MemFree — it accounts for
+    # reclaimable page cache, so MemFree would defer constantly on any host
+    # with a warm cache, which is most of them.
+    avail_mem_mb="$(awk '/^MemAvailable:/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null)"
+    if [[ -n "$avail_mem_mb" && "$avail_mem_mb" -lt "$MIN_FREE_MEM_MB" ]]; then
+      RESOURCE_DEFER_REASON="only ${avail_mem_mb}MB memory available, below MIN_FREE_MEM_MB (${MIN_FREE_MEM_MB}MB)"
+      return
+    fi
+  fi
 }
 
 record_failure() {
   local reason="$1"
-  log "FAILURE: $reason"
+  log "FAILURE: $reason" "failure"
   echo "Previous execution ($AGENT_NAME) failed ($reason) at $(date -Iseconds)." > "$LAST_FAILURE_FILE"
 
   local prev=0
@@ -144,7 +338,7 @@ record_failure() {
 
 record_success() {
   local note="${1:-success}"
-  log "$note"
+  log "$note" "success"
   : > "$LAST_FAILURE_FILE"
   echo 0 > "$FAILURE_COUNT_FILE"
 }
@@ -162,14 +356,27 @@ reliability_main() {
   mkdir -p "$LOG_DIR"
 
   if [[ -f "$HELD_FLAG" ]]; then
-    log "skip: circuit breaker is held ($(cat "$HELD_FLAG"))"
+    log "skip: circuit breaker is held ($(cat "$HELD_FLAG"))" "breaker_held"
     exit "$EXIT_CIRCUIT_BREAKER_HELD"
   fi
 
   if [[ -f "$PAUSED_FLAG" ]]; then
-    log "skip: paused ($(cat "$PAUSED_FLAG")) — run scripts/commands/start.sh (or the /continuous-code-auditor-start command) to resume"
+    log "skip: paused ($(cat "$PAUSED_FLAG")) — run scripts/commands/start.sh (or the /continuous-code-auditor-start command) to resume" "paused"
     exit "$EXIT_PAUSED"
   fi
+
+  # Checked before preflight and before the lock is taken: a deferral should
+  # cost as close to nothing as possible and must not hold the lock while the
+  # host is already struggling.
+  resource_gate
+  if [[ -n "${RESOURCE_DEFER_REASON:-}" ]]; then
+    log "defer: $RESOURCE_DEFER_REASON — skipping this tick, will retry on the next one (not a failure; does not count toward the circuit breaker)" "resource_deferred"
+    exit "$EXIT_RESOURCE_DEFERRED"
+  fi
+
+  # Before preflight, so pruning can free space ahead of the disk gate rather
+  # than after it has already hard-failed the run.
+  enforce_retention
 
   PREFLIGHT_FAILED=""
   if [[ -z "${MODEL_NAME:-}" || "$MODEL_NAME" == CHANGE_ME* ]]; then
@@ -220,7 +427,7 @@ reliability_main() {
   exec 200>"$LOCK"
   if ! flock -n 200; then
     if [[ -s "$LOCK_META" ]]; then
-      log "skip: lock held by $(cat "$LOCK_META")"
+      log "skip: lock held by $(cat "$LOCK_META")" "lock_held"
     else
       log "skip: another audit instance already holds the lock (no metadata found)"
     fi

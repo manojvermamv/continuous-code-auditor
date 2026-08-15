@@ -33,10 +33,12 @@ This file covers everything needed to understand *where things live* and *how on
     logs/
         cron.log
         auditor.log
+        watchdog.log                                            (scheduler-liveness checks — separate from auditor.log)
         last_failure.txt                                        (wrapper-internal, feeds SKILL.md's step-5 prep)
         consecutive_failures.txt                                (wrapper-internal, circuit breaker counter)
+        cumulative_cost_usd.txt                                 (wrapper-internal, running total vs CUMULATIVE_BUDGET_USD)
         held.flag                                               (present only while the circuit breaker is tripped)
-        paused.flag                                             (present only after /continuous-code-auditor-stop)
+        paused.flag                                             (present only after /continuous-code-auditor-stop, or on budget exhaustion)
         <agent>_session_id.txt                                  (wrapper-internal, for session continuity — optional, per-adapter, see adapters/<cli>.md)
         execution_log_archive/                                  (rotated-out execution_log.md entries)
 
@@ -243,6 +245,7 @@ Key points that apply regardless of which CLI is configured:
 | `10` | Skipped — another instance already held the lock | library |
 | `12` | Skipped — circuit breaker is held (see §9 in consistency-and-safeguards.md) | library |
 | `13` | Skipped — paused via `/continuous-code-auditor-stop` (or `scripts/commands/stop.sh`) | library |
+| `14` | Deferred — host under resource pressure (load/memory); self-clearing, retried next tick | library |
 | `15` | Preflight/config failure (CLI missing, `MODEL_NAME` never configured, skill not installed where the CLI expects, bad paths) | library / adapter preflight |
 | `20` | Active source failed to compile | model, via sentinel below |
 | `30` | A configured source fetch failed | model, via sentinel below |
@@ -254,7 +257,7 @@ Codes `20`, `30`, and `50` depend on the model itself, not the shell wrapper —
 
 Before that mapping runs, each runner gets a chance (via its `classify_failure()` hook) to override `$STATUS` based on anything CLI-specific it knows how to check — for example, the opencode adapter treats a `0` exit status alongside non-empty stderr as a failure anyway (a documented false-success quirk for that CLI specifically), while the Codex CLI adapter instead scans the JSONL stream for an explicit `turn.failed` event, because for that CLI non-empty stderr is normal progress output, not a failure signal. See `adapters/<cli>.md` for what each adapter actually checks and why — do not assume one CLI's heuristic transfers to another.
 
-Treat `10`, `12`, and `13` as informational for alerting purposes (a lock conflict, an already-known held state, or an intentional pause isn't a *new* failure), `50` as informational-but-worth-a-look, and `15`/`20`/`30`/`40`/`1` as the set that should count toward the circuit breaker and trigger a real alert. If your cron setup mails on any non-zero exit, you may want to adjust `MAILTO` handling or filter on these specific codes so a benign lock-skip or pause doesn't page anyone.
+Treat `10`, `12`, `13`, and `14` as informational for alerting purposes (a lock conflict, an already-known held state, an intentional pause, or a self-clearing resource deferral isn't a *new* failure), `50` as informational-but-worth-a-look, and `15`/`20`/`30`/`40`/`1` as the set that should count toward the circuit breaker and trigger a real alert. If your cron setup mails on any non-zero exit, you may want to adjust `MAILTO` handling or filter on these specific codes so a benign lock-skip or pause doesn't page anyone.
 
 ## Recovery
 
@@ -338,6 +341,8 @@ Running every few minutes forever will otherwise grow `archives/` and log files 
 
 - Point `logs/` at `logrotate`, or rely on journald's own retention if fully on systemd.
 - Define an archive retention policy for `archives/source_<timestamp>.py` (e.g. keep the last K, or last N days) — but never delete an archive that's still cited as evidence for an unresolved or `Contradiction-Flagged` finding.
+**All of the below is enforced in code as of v1.5.0** (`enforce_retention()` in `scripts/lib/reliability.sh`, run before preflight so pruning can free space ahead of the disk gate). Prior to that it was documented policy that nothing implemented — which is worse than no policy, because it reads as handled.
+
 - **`execution_log.md` needs its own rotation policy, distinct from the above.** It's append-only by design (never rewrite history), but "append-only forever" still means unbounded growth over months of 24×7 runs — and eventually the model ends up reading the whole thing every execution just to answer "what was I doing previously?", wasting tokens on ancient history. Rotate it: keep roughly the last 1000 executions in the active `execution_log.md`, move older entries into `logs/execution_log_archive/` (chunked by date or count, same as source archives), and keep a short running summary of the archived portion in `audit_state.json` so nothing is actually lost — just no longer re-read by default.
 
 ### Circuit breaker and alerting
@@ -356,9 +361,28 @@ sudo systemctl enable --now continuous-code-auditor-watchdog.timer
 
 (see `scripts/systemd/continuous-code-auditor-watchdog.service` / `.timer` — a 10-minute check interval against a 30-minute staleness threshold gives 2-3 missed main-timer ticks of slack before alerting). It correctly treats an intentional pause (`paused.flag`) or an already-alerting circuit breaker (`held.flag`) as expected staleness, not a scheduler failure — it only fires when the auditor should be running and simply isn't.
 
-### Disk-space preflight
+**The watchdog has its own, deliberately simple exit-code contract**, separate from the dispatcher's table above — don't conflate the two, since `1` means something different in each:
 
-A 24×7 process that archives and logs forever will eventually fill a disk if the retention above isn't actually being enforced. Preflight (in `scripts/lib/reliability.sh`, shared by every adapter) checks available space on the filesystem holding `PROJECT` against `MIN_FREE_DISK_MB` (default 100) and refuses to run below it — failing loudly here is much better than failing partway through an atomic write or lock creation.
+| Code | Meaning |
+|---|---|
+| `0` | Healthy, or intentionally not checking (paused, breaker held, no heartbeat yet) |
+| `1` | Stale — no execution in longer than `WATCHDOG_MAX_STALE_MINUTES`; the scheduler itself may be dead |
+
+It only ever reports; it never writes to `work/`, never touches the pause/hold flags, and never runs an audit itself.
+
+### Resource gating: disk (hard failure) vs. load/memory (deferral)
+
+Two different kinds of resource pressure, deliberately handled two different ways — the distinction matters more than either check individually.
+
+**Disk is a hard failure.** A 24×7 process that archives and logs forever will eventually fill a disk if the retention above isn't actually enforced. Preflight (in `scripts/lib/reliability.sh`, shared by every adapter) checks available space on the filesystem holding `PROJECT` against `MIN_FREE_DISK_MB` (default 100) and refuses to run below it with exit `15`. Failing loudly here is much better than failing partway through an atomic write or lock creation — and a full disk does not resolve itself, so it *should* demand attention.
+
+**Load and memory are deferrals.** `MAX_LOAD_PER_CPU` (default 4.0, per-CPU so the same value works on a 1-core VM and a 32-core server) and the optional `MIN_FREE_MEM_MB` are checked before preflight and before the lock is taken. Exceeding either returns exit `14` and skips that tick — it does **not** call `record_failure`, does **not** count toward the circuit breaker, and is retried on the next scheduler tick.
+
+That asymmetry is the whole design. If overload were treated as a failure, three busy ticks in a row would trip the circuit breaker and require a human to clear `held.flag` — for a condition that would have resolved itself in minutes. Grouping `14` with the other informational skips (`10` lock-held, `12` breaker-held, `13` paused) rather than the `15`+ failures keeps self-clearing conditions self-clearing.
+
+Practical notes: the memory check reads `MemAvailable`, not `MemFree`, so a warm page cache doesn't cause constant spurious deferrals. Both gates read `/proc`, so on a non-Linux host they simply don't engage — the auditor runs normally rather than erroring. Set `MAX_LOAD_PER_CPU=""` to disable load gating entirely; `MIN_FREE_MEM_MB` is unset (off) by default, since what counts as "low memory" varies far more between deployments than load does.
+
+If you see frequent `14`s in `logs/auditor.log`, the host is genuinely contended — either the audit schedule is too aggressive for the box, or something else on it is. That's useful signal, not noise.
 
 ### Stale-session self-healing
 

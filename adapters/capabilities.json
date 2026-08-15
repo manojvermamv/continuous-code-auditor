@@ -1,0 +1,83 @@
+{
+  "_comment": [
+    "Machine-readable capability matrix for every agent-CLI adapter.",
+    "",
+    "IMPORTANT: this file is VERIFIED, not merely maintained. tests/verify_capabilities.sh",
+    "exercises each adapter against mock CLI output and asserts that what actually happens",
+    "matches what is declared here. A hand-written matrix describing code inevitably drifts",
+    "into confident lies; the harness is what keeps this honest. If you change an adapter,",
+    "the verification test fails until this file agrees with reality.",
+    "",
+    "Behavioral fields (verified by the harness): session_continuity, cost_reporting,",
+    "failure_detection, requires_jq. Descriptive fields (documentation only, not verifiable",
+    "from mocks): skill_discovery, native_slash_commands, notes."
+  ],
+  "schema_version": 1,
+  "adapters": {
+    "opencode": {
+      "binary": "opencode",
+      "skill_discovery": "file_attachment",
+      "skill_dir": null,
+      "session_continuity": "explicit_id",
+      "session_id_confirmed": false,
+      "structured_output_flag": "--format json",
+      "cost_reporting": false,
+      "failure_detection": "stderr_heuristic",
+      "requires_jq": true,
+      "native_slash_commands": false,
+      "notes": "No confirmed skill-directory convention; SKILL.md is attached per invocation with -f/--file. Documented false-success quirk: exit 0 with non-empty stderr is treated as failure, which is why --print-logs must NOT be passed."
+    },
+    "claude-code": {
+      "binary": "claude",
+      "skill_discovery": "native",
+      "skill_dir": "~/.claude/skills or .claude/skills",
+      "session_continuity": "explicit_id",
+      "session_id_confirmed": false,
+      "structured_output_flag": "--output-format json",
+      "cost_reporting": true,
+      "failure_detection": "exit_code",
+      "requires_jq": true,
+      "native_slash_commands": true,
+      "notes": "Only adapter implementing extract_cost_usd (total_cost_usd in the JSON envelope), so CUMULATIVE_BUDGET_USD is meaningful here and inert elsewhere. Headless mode requires an explicit tool/permission scope."
+    },
+    "gemini-cli": {
+      "binary": "gemini",
+      "skill_discovery": "native",
+      "skill_dir": "~/.gemini/skills or .gemini/skills",
+      "session_continuity": "native_resume",
+      "session_id_confirmed": true,
+      "structured_output_flag": "-o json",
+      "cost_reporting": false,
+      "failure_detection": "exit_code",
+      "requires_jq": false,
+      "native_slash_commands": true,
+      "notes": "Uses its own --resume latest selector rather than an explicit captured id, so extract_session_id is a deliberate no-op. Project-scoped skills require a trusted workspace (/trust)."
+    },
+    "codex-cli": {
+      "binary": "codex",
+      "skill_discovery": "native",
+      "skill_dir": "~/.codex/skills or .codex/skills",
+      "session_continuity": "explicit_id",
+      "session_id_confirmed": true,
+      "structured_output_flag": "--json",
+      "cost_reporting": false,
+      "failure_detection": "event_stream",
+      "requires_jq": true,
+      "native_slash_commands": false,
+      "notes": "Best-documented adapter: session id comes from a documented thread.started event, and failure from a documented turn.failed event. Non-empty stderr is NORMAL here (progress streams to stderr), so the opencode heuristic must not be reused."
+    },
+    "hermes": {
+      "binary": "hermes",
+      "skill_discovery": "native",
+      "skill_dir": "~/.hermes/skills (category subdirs) or ~/.agents/skills",
+      "session_continuity": "none",
+      "session_id_confirmed": false,
+      "structured_output_flag": null,
+      "cost_reporting": false,
+      "failure_detection": "exit_code",
+      "requires_jq": false,
+      "native_slash_commands": false,
+      "notes": "Session continuity is functionally ABSENT despite invoke_agent having a --resume code path: extract_session_id is a deliberate no-op (no confirmed structured-output flag), so the id file is never written and --resume is never passed. Declared 'explicit_id' until the verification harness caught it. Confirm a structured-output flag on your installed version, implement extract_session_id, then update this to 'explicit_id' — the harness will hold you to it. Supports explicit skill preloading with -s, which is more deterministic than description-matching."
+    }
+  }
+}

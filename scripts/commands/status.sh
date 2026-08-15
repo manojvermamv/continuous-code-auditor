@@ -40,6 +40,32 @@ if [[ -s "$LOG_DIR/consecutive_failures.txt" ]]; then
   echo "consecutive failures: $(cat "$LOG_DIR/consecutive_failures.txt")"
 fi
 
+if [[ -s "$LOG_DIR/cumulative_cost_usd.txt" ]]; then
+  if [[ -n "${CUMULATIVE_BUDGET_USD:-}" ]]; then
+    echo "cumulative spend: \$$(cat "$LOG_DIR/cumulative_cost_usd.txt") of \$$CUMULATIVE_BUDGET_USD budget"
+  else
+    echo "cumulative spend: \$$(cat "$LOG_DIR/cumulative_cost_usd.txt") (no CUMULATIVE_BUDGET_USD set)"
+  fi
+fi
+
+if command -v df >/dev/null 2>&1; then
+  AVAIL_MB="$(df -Pm "$PROJECT" 2>/dev/null | awk 'NR==2 {print $4}')"
+  [[ -n "$AVAIL_MB" ]] && echo "disk free:      ${AVAIL_MB}MB (minimum: ${MIN_FREE_DISK_MB:-100}MB)"
+fi
+
+if [[ -r /proc/loadavg && -n "${MAX_LOAD_PER_CPU:-4.0}" ]]; then
+  L1="$(awk '{print $1}' /proc/loadavg)"
+  NCPU="$(nproc 2>/dev/null || echo 1)"
+  THR="$(awk -v m="${MAX_LOAD_PER_CPU:-4.0}" -v c="$NCPU" 'BEGIN{printf "%.2f", m*c}')"
+  echo "load:           $L1 (defer above: $THR)"
+fi
+
+if [[ -f "$LOG_DIR/watchdog.log" ]]; then
+  echo "watchdog:       last check — $(tail -n 1 "$LOG_DIR/watchdog.log")"
+else
+  echo "watchdog:       no checks logged yet (is continuous-code-auditor-watchdog.timer enabled, or a watchdog cron entry installed?)"
+fi
+
 echo
 echo "-- last few log lines (logs/auditor.log) --"
 if [[ -f "$LOG_DIR/auditor.log" ]]; then

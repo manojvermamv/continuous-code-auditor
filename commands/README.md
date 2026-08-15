@@ -1,9 +1,10 @@
 # Operational commands
 
-Seven deterministic, non-model operations live in `scripts/commands/` — deliberately implemented as plain bash, not left to model judgment, because things like "reset" and "uninstall" should behave identically every time regardless of which agent CLI or model is running the skill:
+Eight deterministic, non-model operations live in `scripts/commands/` — deliberately implemented as plain bash, not left to model judgment, because things like "reset" and "uninstall" should behave identically every time regardless of which agent CLI or model is running the skill:
 
 | Command | Script | What it does |
 |---|---|---|
+| `/continuous-code-auditor-doctor` | `scripts/commands/doctor.sh` | Read-only diagnostics: config, dependencies, skill install, paths, disk, run state, scheduling — reports exactly what's broken and how to fix it. Exits `1` if anything is blocking. |
 | `/continuous-code-auditor-status` | `scripts/commands/status.sh` | Read-only summary: paused/held state, lock state, last execution, findings counts. |
 | `/continuous-code-auditor-start` | `scripts/commands/start.sh` | Clears the pause flag; best-effort resumes a systemd timer. |
 | `/continuous-code-auditor-stop` | `scripts/commands/stop.sh` | Sets the pause flag so new scheduled runs skip immediately; doesn't interrupt one already in progress. |

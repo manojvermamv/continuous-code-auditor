@@ -47,13 +47,12 @@ agent_specific_preflight() {
 }
 
 build_message() {
-  local msg="Continue the continuous-code-auditor audit. This is a non-interactive scheduled execution — no conversational memory is assumed; reconstruct everything from the workspace on disk as SKILL.md instructs."
-  if [[ -n "${PRIOR_FAILURE_NOTE:-}" ]]; then
-    msg="$msg
+  # The prior-failure note and the audit-target context both come from
+  # auditor_context_block() in scripts/lib/reliability.sh — shared across
+  # every adapter so the two can't drift apart between runners.
+  printf '%s
 
-PRIOR_RUN_FAILURE_NOTE: $PRIOR_FAILURE_NOTE"
-  fi
-  printf '%s' "$msg"
+%s' "Continue the continuous-code-auditor audit. This is a non-interactive scheduled execution — no conversational memory is assumed; reconstruct everything from the workspace on disk as SKILL.md instructs." "$(auditor_context_block)"
 }
 
 invoke_agent() {

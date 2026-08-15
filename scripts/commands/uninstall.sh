@@ -63,6 +63,22 @@ for skills_dir_name in .claude/skills .gemini/skills .codex/skills .hermes/skill
   done
 done
 
+# Slash-command files installed by installer/install.sh. Without this, the
+# eight /continuous-code-auditor-* commands stay visible in the CLI after an
+# uninstall and fail when invoked, because the script they point at is gone.
+removed_cmds=0
+for cmd_dir in .claude/commands .gemini/commands; do
+  for base in "$HOME" "$PROJECT"; do
+    for f in "$base/${cmd_dir}/${SKILL_NAME}-"*; do
+      if [[ -e "$f" ]]; then
+        rm -f "$f"
+        removed_cmds=$((removed_cmds + 1))
+      fi
+    done
+  done
+done
+[[ "$removed_cmds" -gt 0 ]] && echo "removed $removed_cmds installed slash-command file(s)"
+
 if [[ "$PURGE" == true ]]; then
   echo
   echo "-- --purge-data was given: removing audit data too --"

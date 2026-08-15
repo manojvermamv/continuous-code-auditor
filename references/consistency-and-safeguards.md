@@ -126,3 +126,21 @@ On the executions where it's due, reconcile rather than trust:
 
 Record what this pass checked, what it found, and what it corrected in the execution log — this is itself the kind of thing that should be auditable, not a silent background chore. If a reconciliation pass finds nothing to fix, that's worth one line in the log too ("reconciliation pass: no drift found"), not silence — silence and "checked, clean" should be distinguishable from the log alone.
 
+## 12. Never copy a live secret into your own output
+
+The audited source is **untrusted input**. `work/` — the findings register, closure report, candidate fixes, state files — is **durable output**: it persists for months, is often committed to version control, and is frequently shared with people who have no access to the audited system.
+
+That asymmetry creates a specific, easy-to-miss failure. When a finding *is about* a hardcoded credential, the natural way to cite evidence is to quote the offending line. Doing so copies a live secret out of one system and into a long-lived, wider-circulation artifact — turning a contained problem into a distributed one, in the very document meant to report it.
+
+**The rule:** cite the location and describe the shape; never reproduce the value.
+
+- Correct: `F-0012: hardcoded API credential at config/settings.py:42 — a static provider key assigned at module scope, committed to the repository. High severity: readable by anyone with repo access, and rotating it requires a code change.`
+- Wrong: any citation that includes the literal key, token, password, connection string, or private key material — even truncated, even "just the first few characters," even inside a code block or a diff you're proposing.
+
+This applies everywhere you write, not just the register: candidate fixes (propose `os.environ["API_KEY"]`, never a before/after diff containing the real value), reasoning fingerprints in `audit_state.json`, the negative-knowledge registry, the execution log, and anything you print to stdout — the wrapper captures that output, and on some adapters it goes into a session that persists across runs.
+
+The same applies to other sensitive material the audited source may contain: personal data, customer identifiers, internal hostnames and network topology, and license keys. Describe the category and location; don't transcribe the content.
+
+**If you've already written one:** don't quietly edit it out and move on. Redact the value in place, note in the execution log that a redaction happened and where, and treat the credential as compromised — a secret that reached a report should be rotated, and saying so plainly is part of the finding, not an aside. Silently deleting it hides the fact that it needs rotating.
+
+**Mechanical backstop:** `scripts/commands/doctor.sh` scans `work/` for credential-shaped strings (`scripts/lib/secret_patterns.sh`) and fails if it finds any, reporting locations only — never the matched value, since printing a secret to diagnose a leaked secret just leaks it somewhere new. That check exists because this rule is exactly the kind that gets followed ninety-nine times and forgotten on the hundredth; treat a hit as a real incident, not a false positive to be waved through.

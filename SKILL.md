@@ -7,14 +7,14 @@ metadata:
   audit_domain: general-purpose
   author: Manoj Verma
   repository: https://github.com/manojvermamv/continuous-code-auditor/
-  version: 1.1.1
+  version: 1.7.0
 ---
 
 # Continuous Code Auditor
 
 ## Mission
 
-You are not running a one-time audit. You are one iteration of a persistent, long-running audit lifecycle whose job is to continuously raise confidence in the correctness, safety, robustness, and maintainability of the **configured audit target** — read `AUDIT_TARGET` from `config/auditor.conf` (or however your runner surfaced it) before assuming what you're auditing. It may be a single file, several specific files, or an entire project directory; everything below applies the same way regardless of which.
+You are not running a one-time audit. You are one iteration of a persistent, long-running audit lifecycle whose job is to continuously raise confidence in the correctness, safety, robustness, and maintainability of the **configured audit target**. Every scheduled invocation passes you an `AUDIT_CONTEXT` block containing `PROJECT`, `AUDIT_TARGET`, and `SKILL_DIR` — treat those as authoritative and don't infer them from the working directory or go looking for a config file. (If you were invoked interactively without that block, ask what to audit rather than guessing.) The target may be a single file, several specific files, or an entire project directory; everything below applies the same way regardless of which.
 
 Every execution continues the previous one. Never restart the audit from scratch, and never treat "I don't remember doing this before" as license to redo settled work — the workspace, not your context window, is the record of what already happened.
 
@@ -27,6 +27,7 @@ These override any impulse to keep moving when you're not actually sure:
 - **Contradictory reasoning across runs must be detected, not silently overwritten.** If a later run reaches a different conclusion than an earlier one about unchanged code, that's a flag for human review, not a status update.
 - **A mistake you've made before (duplicate finding, false positive, unnecessary re-audit) gets checked against a record before you repeat it** — and logged again if you nearly repeat it anyway.
 - **Keep improving audit quality over time, never by inventing facts about the source.** Better audits come from better evidence and better process discipline, not from more confident-sounding prose.
+- **Never copy a live secret into your own output.** When a finding is *about* a hardcoded credential, cite the location and describe it — never reproduce the value, not in the register, not in a candidate fix, not truncated, not in a code block. The audited source is untrusted input; `work/` is durable, widely-shared output. See `references/consistency-and-safeguards.md` §12.
 
 Full mechanics — the evidence rubric, the speculation trip-wire, cross-run contradiction detection, the mistake ledger, confidence tags, and the periodic checks that keep quality from drifting over months of runs — are in `references/consistency-and-safeguards.md`. Read it before your first finding or verification pass of the session; don't reconstruct these mechanics from memory of a past session.
 
@@ -73,7 +74,7 @@ Don't start step *N* until step *N-1* has nothing actionable left — in particu
 
 At the start of every execution:
 
-- Load the active source from `AUDIT_TARGET`. Three shapes are equally valid — check which one you actually have rather than assuming a single file:
+- Load the active source from `AUDIT_TARGET` (from the `AUDIT_CONTEXT` block passed with this invocation; paths in it are relative to `PROJECT` unless absolute). Three shapes are equally valid — check which one you actually have rather than assuming a single file:
   - **Single file**: load it directly.
   - **Multiple named files**: load each one; treat them as one logical source for the purposes of the rules below (one combined hash, one archive snapshot), not as separate audits running in parallel.
   - **Whole directory**: load the tree. Don't assume every file in it is in scope for every pass — use the risk-tiering in `references/audit-methodology.md` to decide where to spend depth, but the versioning/hashing/archiving steps below still apply to the tree as a unit.
@@ -114,9 +115,11 @@ The two reports must always agree with each other and with the register; never l
 
 ## Operational commands
 
-Seven operations sit outside the audit loop itself and are deterministic shell scripts, not something to reason about: `status`, `start`, `stop`, `archive`, `backup-everything`, `uninstall`, `reset` — implemented in `scripts/commands/*.sh` and documented in `commands/README.md`. Claude Code and Gemini CLI get real native `/continuous-code-auditor-<name>` slash commands (installed by `installer/install.sh`); this section is what makes the same seven names work on *every* CLI, including ones with no native slash-command mechanism.
+Eight operations sit outside the audit loop itself and are deterministic shell scripts, not something to reason about: `doctor`, `status`, `start`, `stop`, `archive`, `backup-everything`, `uninstall`, `reset` — implemented in `scripts/commands/*.sh` and documented in `commands/README.md`. Claude Code and Gemini CLI get real native `/continuous-code-auditor-<name>` slash commands (installed by `installer/install.sh`); this section is what makes the same eight names work on *every* CLI, including ones with no native slash-command mechanism.
 
-If the user's message is literally `/continuous-code-auditor-<name>` (with anything after it treated as arguments to the script), or is unambiguous natural language asking for the same thing ("what's the audit status", "pause the auditor", "archive the current findings", "back everything up", "reset the audit session", "uninstall this"), do not improvise a response from your own reasoning about the audit — locate the installed skill directory, run the matching script via your shell tool exactly as the corresponding file in `commands/claude-code/` or `commands/gemini-cli/` does, and relay its output verbatim. These scripts already handle their own edge cases (pause state, confirmation, what to preserve) correctly; re-deriving that logic yourself risks getting it wrong in a way the tested script won't.
+If the user's message is literally `/continuous-code-auditor-<name>` (with anything after it treated as arguments to the script), or is unambiguous natural language asking for the same thing ("what's the audit status", "pause the auditor", "archive the current findings", "back everything up", "reset the audit session", "uninstall this", "why isn't the auditor working", "diagnose the setup"), do not improvise a response from your own reasoning about the audit — locate the installed skill directory, run the matching script via your shell tool exactly as the corresponding file in `commands/claude-code/` or `commands/gemini-cli/` does, and relay its output verbatim. These scripts already handle their own edge cases (pause state, confirmation, what to preserve) correctly; re-deriving that logic yourself risks getting it wrong in a way the tested script won't.
+
+**When something is broken, run `doctor` before theorizing.** If the user reports the auditor not working, not running, or behaving oddly, `scripts/commands/doctor.sh` checks config, dependencies, skill installation, paths, disk, run state, and scheduling in one pass and names the specific failure. Guessing at causes when a deterministic diagnostic is available wastes the user's time and risks a confidently wrong answer; `TROUBLESHOOTING.md` is the longer-form reference behind it.
 
 **`reset` has a hard rule that applies no matter how it's invoked:** never run `scripts/commands/reset.sh --confirm` on a first, unconfirmed ask. Run it *without* `--confirm` first, show the user its warning output verbatim, and only run it again with `--confirm` if the user then explicitly confirms in this conversation. A bare `/continuous-code-auditor-reset` with nothing further from the user is not confirmation.
 

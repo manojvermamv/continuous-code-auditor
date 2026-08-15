@@ -26,6 +26,14 @@ hermes chat -s continuous-code-auditor --model <MODEL_NAME> [--resume <session-i
 
 ## Session continuity
 
+**Currently non-functional, and the capability matrix says so.** `invoke_agent` has a `--resume` code path, but `extract_session_id` is a deliberate no-op (no confirmed structured-output flag, below), so the session-id file is never written and `--resume` is never passed. The behavioral verification harness (`tests/verify_capabilities.sh`) caught this after it had sat undetected through several releases declared as working.
+
+To enable it: confirm a structured-output flag on your installed version, implement `extract_session_id` against the confirmed schema, then update `session_continuity` to `explicit_id` in `adapters/capabilities.json` — the harness will verify the claim rather than take it on faith.
+
+As with every adapter, this costs context re-establishment per run, never correctness: `SKILL.md` assumes no conversational memory regardless.
+
+## Session continuity (original notes)
+
 Two documented mechanisms: `hermes --continue` (`-c`, resume the most recent CLI session) and `hermes --resume <session_id>` (`-r`, resume a specific one). This adapter uses the explicit form, for consistency with the other adapters — though session-id **extraction is not implemented for this CLI**, see below.
 
 ## Failure detection and output parsing — the one open question in this skill

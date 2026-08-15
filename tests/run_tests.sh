@@ -234,6 +234,236 @@ PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
 check "resumed: run succeeds" "0" "$?"
 
 echo
+echo "-- AUDIT_CONTEXT actually reaches the agent (v1.1.2: it previously did not) --"
+CAPTURE="$TMP_ROOT/captured_msg.txt"
+cat > "$BINDIR/opencode" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do echo "ARG: \$a"; done > "$CAPTURE"
+echo 'AUDITOR_EXIT_REASON: success'
+exit 0
+EOF
+chmod +x "$BINDIR/opencode"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+write_config "opencode"
+sed -i 's|^AUDIT_TARGET=.*|AUDIT_TARGET="src/a.py src/b.py"|' "$CONFIG"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "AUDIT_TARGET reaches the agent" "0" "$(grep -q 'AUDIT_TARGET=src/a.py src/b.py' "$CAPTURE"; echo $?)"
+check "PROJECT reaches the agent" "0" "$(grep -q "PROJECT=$PROJECT" "$CAPTURE"; echo $?)"
+sed -i "s|^AUDIT_TARGET=.*|AUDIT_TARGET=\"target.py\"|" "$CONFIG"
+
+echo "-- prior-failure note still carried into the next run's message --"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+write_failure_mocks "$BINDIR"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+cat > "$BINDIR/opencode" <<EOF
+#!/usr/bin/env bash
+for a in "\$@"; do echo "ARG: \$a"; done > "$CAPTURE"
+echo 'AUDITOR_EXIT_REASON: success'
+exit 0
+EOF
+chmod +x "$BINDIR/opencode"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "PRIOR_RUN_FAILURE_NOTE reaches the agent" "0" "$(grep -q 'PRIOR_RUN_FAILURE_NOTE' "$CAPTURE"; echo $?)"
+rm -f "$LOG_DIR/held.flag" "$LOG_DIR/consecutive_failures.txt"
+write_success_mocks "$BINDIR"
+
+echo
+echo "-- load gate: resource pressure defers (exit 14) rather than failing (v1.3.0) --"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+write_config "opencode"
+write_success_mocks "$BINDIR"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "load gate: normal load runs fine" "0" "$?"
+
+cp "$CONFIG" "$TMP_ROOT/conf.noload"
+echo 'MAX_LOAD_PER_CPU="-1"' >> "$CONFIG"   # impossible to satisfy -> always defers
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "load gate: over threshold defers with exit 14" "14" "$?"
+
+# The core property: a deferral is self-clearing, so it must never advance
+# the circuit breaker. Three deferrals in a row must still leave it untripped.
+for _ in 1 2 3; do PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1; done
+check "load gate: repeated deferrals do NOT trip the circuit breaker" "0" "$([[ ! -f "$LOG_DIR/held.flag" ]]; echo $?)"
+check "load gate: deferrals do NOT increment consecutive failures" "0" "$([[ ! -s "$LOG_DIR/consecutive_failures.txt" ]] || [[ "$(cat "$LOG_DIR/consecutive_failures.txt")" == "0" ]]; echo $?)"
+
+cp "$TMP_ROOT/conf.noload" "$CONFIG"
+echo 'MIN_FREE_MEM_MB="99999999"' >> "$CONFIG"   # impossible -> always defers
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "memory gate: below minimum defers with exit 14" "14" "$?"
+
+cp "$TMP_ROOT/conf.noload" "$CONFIG"
+echo 'MAX_LOAD_PER_CPU=""' >> "$CONFIG"          # explicitly disabled
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "load gate: can be disabled with an empty MAX_LOAD_PER_CPU" "0" "$?"
+cp "$TMP_ROOT/conf.noload" "$CONFIG"
+
+echo
+echo "-- adapter capability matrix is verified against real behavior (v1.7.0) --"
+bash "$SKILL_DIR/tests/verify_capabilities.sh" "$SKILL_DIR" >"$TMP_ROOT/cap.txt" 2>&1
+check "capabilities.json matches observed adapter behavior" "0" "$?"
+check "every adapter has a matrix entry (none missing)" "0" "$(grep -c 'MISSING from capabilities.json' "$TMP_ROOT/cap.txt" || true)"
+
+echo
+echo "-- observability: version stamp, structured logs, --help/--dry-run (v1.6.0) --"
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+write_config "opencode"
+echo 'LOG_FORMAT="text,json"' >> "$CONFIG"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "human log carries the version stamp" "0" "$(grep -qE '\([0-9]+\.[0-9]+\.[0-9]+\)' "$LOG_DIR/auditor.log"; echo $?)"
+check "structured auditor.jsonl is written when LOG_FORMAT includes json" "0" "$([[ -s "$LOG_DIR/auditor.jsonl" ]]; echo $?)"
+check "every jsonl line is valid JSON with the expected fields" "0" "$(python3 -c "
+import json,sys
+for l in open('$LOG_DIR/auditor.jsonl'):
+    l=l.strip()
+    if not l: continue
+    d=json.loads(l)
+    assert all(k in d for k in ('ts','version','agent','event','project','message'))
+" >/dev/null 2>&1; echo $?)"
+
+# JSON must survive hostile content — quotes and backslashes in a failure message
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+printf '#!/usr/bin/env bash\necho %s >&2\nexit 1\n' "'he said \"boom\" \\ C:\\temp'" > "$BINDIR/opencode"
+chmod +x "$BINDIR/opencode"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "jsonl stays valid when messages contain quotes and backslashes" "0" "$(python3 -c "
+import json
+for l in open('$LOG_DIR/auditor.jsonl'):
+    l=l.strip()
+    if l: json.loads(l)
+" >/dev/null 2>&1; echo $?)"
+rm -f "$LOG_DIR/held.flag" "$LOG_DIR/consecutive_failures.txt"
+write_success_mocks "$BINDIR"
+
+# text-only (the default) must not create the jsonl file
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"; write_config "opencode"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "default LOG_FORMAT does not create auditor.jsonl" "0" "$([[ ! -e "$LOG_DIR/auditor.jsonl" ]]; echo $?)"
+
+check "--help exits 0" "0" "$(bash "$SKILL_DIR/scripts/run_auditor.sh" --help >/dev/null 2>&1; echo $?)"
+check "--version prints a semver" "0" "$(bash "$SKILL_DIR/scripts/run_auditor.sh" --version 2>/dev/null | grep -qE '[0-9]+\.[0-9]+\.[0-9]+'; echo $?)"
+
+# --dry-run must report without invoking, locking, or writing
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" --dry-run >"$TMP_ROOT/dry.txt" 2>&1
+check "--dry-run exits 0 on a healthy install" "0" "$?"
+check "--dry-run says what would happen" "0" "$(grep -q 'a real run would' "$TMP_ROOT/dry.txt"; echo $?)"
+check "--dry-run writes nothing to LOG_DIR" "0" "$([[ -z "$(ls -A "$LOG_DIR" 2>/dev/null)" ]]; echo $?)"
+
+echo
+echo "-- retention: archives and logs are actually pruned, not just documented (v1.5.0) --"
+rm -rf "$LOG_DIR" "$PROJECT/archives"; mkdir -p "$LOG_DIR" "$PROJECT/archives" "$PROJECT/work"
+write_config "opencode"
+echo 'ARCHIVE_RETENTION_COUNT=5' >> "$CONFIG"
+for i in $(seq -w 1 20); do touch "$PROJECT/archives/source_ret$i.py"; sleep 0.01; done
+printf 'F-0001 evidence: archives/source_ret01.py line 42\n' > "$PROJECT/work/continuous_code_audit_findings.md"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+ARC_LEFT="$(find "$PROJECT/archives" -name 'source_ret*' | wc -l | tr -d ' ')"
+check "retention: prunes old archives (20 -> 6: newest 5 + 1 cited)" "6" "$ARC_LEFT"
+check "retention: never prunes an archive cited by the findings register" "0" "$([[ -f "$PROJECT/archives/source_ret01.py" ]]; echo $?)"
+rm -f "$PROJECT/work/continuous_code_audit_findings.md"
+
+# Log rotation must work independently of archive pruning — an earlier draft
+# coupled them via an early return, silently disabling rotation.
+rm -rf "$LOG_DIR" "$PROJECT/archives"; mkdir -p "$LOG_DIR"
+write_config "opencode"
+echo 'EXECUTION_LOG_MAX_LINES=100' >> "$CONFIG"
+seq 1 500 | sed 's/^/entry /' > "$PROJECT/work/execution_log.md"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "retention: rotates execution_log.md when oversized" "50" "$(wc -l < "$PROJECT/work/execution_log.md" | tr -d ' ')"
+check "retention: rotation preserves full history in the archive" "500" "$(cat "$LOG_DIR/execution_log_archive/"*.md 2>/dev/null | wc -l | tr -d ' ')"
+check "retention: rotation keeps the most recent entries" "0" "$(tail -1 "$PROJECT/work/execution_log.md" | grep -q 'entry 500'; echo $?)"
+check "retention: log rotation runs even when archives/ does not exist" "0" "$([[ ! -d "$PROJECT/archives" ]]; echo $?)"
+
+# Retention must be disableable
+rm -rf "$LOG_DIR" "$PROJECT/archives"; mkdir -p "$LOG_DIR" "$PROJECT/archives"
+write_config "opencode"
+echo 'ARCHIVE_RETENTION_COUNT=0' >> "$CONFIG"
+for i in $(seq -w 1 10); do touch "$PROJECT/archives/source_keep$i.py"; done
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+check "retention: ARCHIVE_RETENTION_COUNT=0 disables pruning" "10" "$(find "$PROJECT/archives" -name 'source_keep*' | wc -l | tr -d ' ')"
+rm -rf "$PROJECT/archives"; write_config "opencode"
+
+echo
+echo "-- secret redaction: credential leaks in work/ are detected (v1.4.0) --"
+source "$SKILL_DIR/scripts/lib/secret_patterns.sh"
+SECRET_TMP="$TMP_ROOT/secretscan"
+mkdir -p "$SECRET_TMP"
+printf 'F-0001 at config.py:42 — a static provider key, value redacted. See source.\n' > "$SECRET_TMP/clean.md"
+scan_for_secrets "$SECRET_TMP" >/dev/null 2>&1
+check "scanner: properly redacted findings are clean" "1" "$?"
+
+printf 'Evidence: config.py:42 reads api_key = "sk-abcd1234efgh5678ijkl"\n' > "$SECRET_TMP/leaked.md"
+scan_for_secrets "$SECRET_TMP" >/dev/null 2>&1
+check "scanner: detects a leaked provider token" "0" "$?"
+
+printf 'AWS_KEY = AKIAIOSFODNN7EXAMPLE\n' > "$SECRET_TMP/leaked_aws.md"
+printf -- '-----BEGIN RSA PRIVATE KEY-----\n' > "$SECRET_TMP/leaked_pem.md"
+SCAN_OUT="$(scan_for_secrets "$SECRET_TMP")"
+check "scanner: detects AWS key ids" "0" "$(printf '%s' "$SCAN_OUT" | grep -q leaked_aws; echo $?)"
+check "scanner: detects PEM private keys" "0" "$(printf '%s' "$SCAN_OUT" | grep -q leaked_pem; echo $?)"
+check "scanner: never echoes the secret value itself" "1" "$(printf '%s' "$SCAN_OUT" | grep -qE 'sk-abcd|AKIAIOSF'; echo $?)"
+check "scanner: reports each location once (no duplicate lines)" "0" "$([[ "$(printf '%s\n' "$SCAN_OUT" | wc -l)" -eq "$(printf '%s\n' "$SCAN_OUT" | sort -u | wc -l)" ]]; echo $?)"
+
+# doctor must escalate a leak to a blocking FAIL, not a warning
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"; write_config "opencode"
+mkdir -p "$PROJECT/work"
+printf 'Evidence: api_key = "sk-abcd1234efgh5678ijkl"\n' > "$PROJECT/work/continuous_code_audit_findings.md"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/commands/doctor.sh" >"$TMP_ROOT/doc_leak.txt" 2>&1
+check "doctor: a credential leak is a blocking FAIL (exit 1)" "1" "$?"
+check "doctor: does not print the leaked value in its report" "1" "$(grep -q 'sk-abcd1234efgh5678ijkl' "$TMP_ROOT/doc_leak.txt"; echo $?)"
+rm -f "$PROJECT/work/continuous_code_audit_findings.md"
+
+echo
+echo "-- repo hygiene: every script is executable (exit 126 otherwise, which looks like a logic bug but isn't) --"
+NONEXEC="$(find "$SKILL_DIR" -name "*.sh" ! -perm -u+x | wc -l | tr -d ' ')"
+check "all .sh files carry the executable bit" "0" "$NONEXEC"
+
+echo
+echo "-- uninstall: removes installed slash-command files, not just the skill link (v1.3.1) --"
+FAKE_CMD_DIR="$HOME/.claude/commands"
+mkdir -p "$FAKE_CMD_DIR"
+touch "$FAKE_CMD_DIR/continuous-code-auditor-doctor.md" "$FAKE_CMD_DIR/continuous-code-auditor-status.md"
+touch "$FAKE_CMD_DIR/unrelated-other-tool.md"
+bash "$SKILL_DIR/scripts/commands/uninstall.sh" >/dev/null 2>&1
+check "uninstall removes this skill's command files" "0" "$([[ ! -e "$FAKE_CMD_DIR/continuous-code-auditor-doctor.md" && ! -e "$FAKE_CMD_DIR/continuous-code-auditor-status.md" ]]; echo $?)"
+check "uninstall leaves unrelated command files alone" "0" "$([[ -e "$FAKE_CMD_DIR/unrelated-other-tool.md" ]]; echo $?)"
+rm -rf "$FAKE_CMD_DIR"
+
+echo
+echo "-- doctor: diagnostics (v1.2.0) --"
+# healthy config: exit 0
+rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
+write_config "opencode"
+write_success_mocks "$BINDIR"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/commands/doctor.sh" >/dev/null 2>&1
+check "doctor: healthy install exits 0" "0" "$?"
+
+# missing config must be DIAGNOSED, not crashed on
+AUDITOR_CONFIG="$TMP_ROOT/definitely-not-here.conf" bash "$SKILL_DIR/scripts/commands/doctor.sh" >"$TMP_ROOT/doc_out.txt" 2>&1
+check "doctor: missing config exits 1" "1" "$?"
+check "doctor: missing config is reported, not a crash" "0" "$(grep -q 'no config file at' "$TMP_ROOT/doc_out.txt"; echo $?)"
+
+# broken config: unset model + nonexistent project => FAILs, exit 1
+cp "$CONFIG" "$TMP_ROOT/conf.good"
+sed -i 's|^MODEL_NAME=.*|MODEL_NAME="CHANGE_ME-x"|' "$CONFIG"
+sed -i "s|^PROJECT=.*|PROJECT=\"$TMP_ROOT/no-such-project\"|" "$CONFIG"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/commands/doctor.sh" >"$TMP_ROOT/doc_out2.txt" 2>&1
+check "doctor: broken install exits 1" "1" "$?"
+check "doctor: flags the placeholder MODEL_NAME" "0" "$(grep -q 'MODEL_NAME is unset or still the placeholder' "$TMP_ROOT/doc_out2.txt"; echo $?)"
+check "doctor: flags the missing PROJECT" "0" "$(grep -q 'PROJECT directory does not exist' "$TMP_ROOT/doc_out2.txt"; echo $?)"
+check "doctor: every FAIL carries a fix hint" "0" "$(awk '/^  \[FAIL\]/{getline nxt; if (nxt !~ /fix:/) bad=1} END{exit bad?1:0}' "$TMP_ROOT/doc_out2.txt"; echo $?)"
+cp "$TMP_ROOT/conf.good" "$CONFIG"
+
+# doctor must never mutate state
+BEFORE_STATE="$(ls -A "$LOG_DIR" 2>/dev/null | sort | tr '\n' ' ')"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/commands/doctor.sh" >/dev/null 2>&1
+AFTER_STATE="$(ls -A "$LOG_DIR" 2>/dev/null | sort | tr '\n' ' ')"
+check "doctor: is read-only (does not change LOG_DIR contents)" "$BEFORE_STATE" "$AFTER_STATE"
+
+echo
 echo "-- archive / backup-everything / reset / uninstall --"
 BEFORE="$(cat "$PROJECT/work/continuous_code_audit_findings.md" 2>/dev/null || echo none)"
 bash "$SKILL_DIR/scripts/commands/archive.sh" "test-checkpoint" >/dev/null

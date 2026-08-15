@@ -4,9 +4,10 @@ Three independent checks, all offline, all runnable locally exactly as CI runs t
 
 | Check | Command | What it catches |
 |---|---|---|
-| Integration tests | `tests/run_tests.sh` | Real behavior: all five adapters, locking, the circuit breaker, pause/resume, and all seven operational commands, against mocked CLI binaries. |
+| Integration tests | `tests/run_tests.sh` | Real behavior: all five adapters, locking, the circuit breaker, pause/resume, and all eight operational commands, against mocked CLI binaries. |
 | Frontmatter validation | `tests/validate_frontmatter.py` | `SKILL.md`'s frontmatter against the [agentskills.io spec](https://agentskills.io/specification) — required fields, length limits, name/directory match, and backtick-referenced files that don't exist. |
 | Markdown link check | `tests/check_markdown_links.py` | Broken relative links across every `.md` file in the repo. |
+| Capability verification | `tests/verify_capabilities.sh` | Whether `adapters/capabilities.json` matches what the adapters *actually do* — probed behaviorally, not read off the source. |
 
 Shellcheck runs in CI directly (`shellcheck scripts/**/*.sh tests/*.sh installer/install.sh`) rather than through a wrapper here — it needs no repo-specific logic.
 

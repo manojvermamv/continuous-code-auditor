@@ -12,6 +12,16 @@ Currently supported, each verified against real `--help` output or official docu
 | Codex CLI | `scripts/runners/run_with_codex-cli.sh` | [codex-cli.md](codex-cli.md) |
 | Hermes Agent | `scripts/runners/run_with_hermes.sh` | [hermes.md](hermes.md) |
 
+## The capability matrix
+
+[`capabilities.json`](capabilities.json) is a machine-readable summary of what each adapter actually supports — session continuity, cost reporting, failure-detection strategy, jq dependency, skill discovery, native slash commands.
+
+**It is verified, not merely maintained.** `tests/verify_capabilities.sh` exercises each adapter's hooks against realistic mock CLI output (via `tests/lib/adapter_harness.sh`) and asserts that observed behavior matches what the matrix declares. It also checks both directions of completeness: every adapter has an entry, every entry has an adapter. CI runs it on every push.
+
+That verification is the whole point. A hand-written matrix describing code is accurate on the day it's written and drifts into confident lies from then on — worse than no matrix, because tooling and operators would believe it. This one caught a real inaccuracy on its very first run: the Hermes adapter declared `session_continuity: explicit_id` and has a `--resume` code path, but `extract_session_id` is a deliberate no-op, so the id file is never written and `--resume` is never actually passed. Functionally it was `none`. Static review had missed it through several releases; the behavioral probe found it immediately.
+
+If you change an adapter's behavior, the verification fails until the matrix agrees. Fix whichever is actually wrong.
+
 ## Adding a new adapter
 
 1. **Verify the CLI's real flags first.** Run `<cli> --help` (and skim its official docs) yourself. Do not assume a flag exists because a similar CLI has it — the opencode adapter exists in its current form specifically because an earlier draft assumed `--context` and `--input-file` flags that turned out not to exist.
