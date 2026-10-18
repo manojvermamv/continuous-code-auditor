@@ -7,7 +7,7 @@ metadata:
   audit_domain: general-purpose
   author: Manoj Verma
   repository: https://github.com/manojvermamv/continuous-code-auditor/
-  version: 1.7.0
+  version: 1.8.0
 ---
 
 # Continuous Code Auditor
@@ -122,6 +122,27 @@ If the user's message is literally `/continuous-code-auditor-<name>` (with anyth
 **When something is broken, run `doctor` before theorizing.** If the user reports the auditor not working, not running, or behaving oddly, `scripts/commands/doctor.sh` checks config, dependencies, skill installation, paths, disk, run state, and scheduling in one pass and names the specific failure. Guessing at causes when a deterministic diagnostic is available wastes the user's time and risks a confidently wrong answer; `TROUBLESHOOTING.md` is the longer-form reference behind it.
 
 **`reset` has a hard rule that applies no matter how it's invoked:** never run `scripts/commands/reset.sh --confirm` on a first, unconfirmed ask. Run it *without* `--confirm` first, show the user its warning output verbatim, and only run it again with `--confirm` if the user then explicitly confirms in this conversation. A bare `/continuous-code-auditor-reset` with nothing further from the user is not confirmation.
+
+## Alignment review
+
+Everything else in this file checks whether the code is *correct*. This section checks whether the audit is still serving what the project is *for* — a different question, and one that only goes wrong slowly, over months, which is exactly when nobody is watching.
+
+`config/charter.md` states the project's purpose, non-goals, what must never break, acceptable trade-offs, current phase, and intended direction. `scripts/checkpoint.sh` records a deterministic hourly snapshot; `scripts/commands/alignment.sh` derives the trajectory from baseline to latest.
+
+**The charter is human-owned. Never write to it, never propose edits to it as a finding, and never treat a mismatch between the charter and the code as evidence the charter is wrong.** If you could revise your own alignment target, you would simply move it to wherever you had drifted, and every report would say "aligned" forever. A self-graded alignment check is not a weak check — it is not a check at all. When the charter and reality disagree, report the disagreement and let a human decide which one moves.
+
+When asked to review alignment (or when a `/continuous-code-auditor-alignment` run shows drift indicators):
+
+1. Read `config/charter.md` in full.
+2. Run `scripts/commands/alignment.sh` and read the trajectory — don't reconstruct it from your own impressions of the session.
+3. Compare the two, and answer plainly:
+   - Do the open findings concentrate on what the charter says must never break, or on things it lists as acceptable trade-offs? Escalating trade-offs the project has explicitly accepted is drift on *your* side, not the project's.
+   - Has the audit target moved in a direction the charter's "direction" section anticipated?
+   - Is the current phase's definition of "good" what you have actually been optimizing for?
+4. Write the assessment into `work/alignment_review.md` — dated, citing specific findings and specific charter lines. Never into the charter itself.
+5. If you conclude the *charter* is stale, say so explicitly as a recommendation to the human, with reasons. That is a legitimate and useful thing to report. Acting on it yourself is not.
+
+Absent a charter, say so rather than inventing one: without a stated intent, trajectory can be measured but nothing can be called aligned or misaligned.
 
 ## Completion standard
 

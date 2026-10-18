@@ -1,10 +1,10 @@
 # Roadmap
 
-Current release: **v1.7.0** — see [`CHANGELOG.md`](CHANGELOG.md). The core contract (adapter hooks, exit codes, operational commands) is frozen as of `v1.0.0`; items below that would break it are major-version work.
+Current release: **v1.8.0** — see [`CHANGELOG.md`](CHANGELOG.md). The core contract (adapter hooks, exit codes, operational commands) is frozen as of `v1.0.0`; items below that would break it are major-version work.
 
 ## Status at a glance
 
-Verified against the codebase as of v1.7.0, not from recollection:
+Verified against the codebase as of v1.8.0, not from recollection:
 
 | # | Item | Status |
 |---|---|---|

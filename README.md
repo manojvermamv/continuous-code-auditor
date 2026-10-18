@@ -1,7 +1,7 @@
 # continuous-code-auditor
 
 [![CI](https://github.com/manojvermamv/continuous-code-auditor/actions/workflows/ci.yml/badge.svg)](https://github.com/manojvermamv/continuous-code-auditor/actions/workflows/ci.yml)
-**v1.7.0** · **by [Manoj Verma](https://github.com/manojvermamv)** · [github.com/manojvermamv/continuous-code-auditor](https://github.com/manojvermamv/continuous-code-auditor) · [MIT license](LICENSE) · [CHANGELOG](CHANGELOG.md) · [ROADMAP](ROADMAP.md) · [TROUBLESHOOTING](TROUBLESHOOTING.md) · [SECURITY](SECURITY.md)
+**v1.8.0** · **by [Manoj Verma](https://github.com/manojvermamv)** · [github.com/manojvermamv/continuous-code-auditor](https://github.com/manojvermamv/continuous-code-auditor) · [MIT license](LICENSE) · [CHANGELOG](CHANGELOG.md) · [ROADMAP](ROADMAP.md) · [TROUBLESHOOTING](TROUBLESHOOTING.md) · [SECURITY](SECURITY.md)
 
 A continuous, resumable code-audit **Agent Skill**. Conforms to the open [Agent Skills specification](https://agentskills.io/specification), works with several different agent CLIs through a small adapter layer, and audits whatever you point it at — a single file, a set of files, or an entire project directory.
 
@@ -52,7 +52,7 @@ continuous-code-auditor/
 ├── scripts/
 │   ├── lib/reliability.sh        ← CLI-agnostic engine: lock, circuit breaker, exit codes, pause/hold
 │   ├── runners/                  ← one adapter script per supported agent CLI
-│   ├── commands/                 ← the eight operational commands (doctor/status/start/stop/…)
+│   ├── commands/                 ← the nine operational commands (doctor/alignment/status/…)
 │   └── run_auditor.sh            ← thin dispatcher
 ├── commands/                 ← native slash-command files per CLI (Claude Code, Gemini CLI)
 ├── config/                   ← auditor.conf.example — copy & fill in per deployment
@@ -137,6 +137,7 @@ Every adapter's flags were checked against real `--help` output or official docs
 | Command | What it does |
 |---|---|
 | `/continuous-code-auditor-doctor` | Read-only diagnostics — checks config, dependencies, skill install, paths, disk, run state and scheduling, and tells you exactly what to fix. Start here when something's wrong. |
+| `/continuous-code-auditor-alignment` | Is the audit still serving what the project is *for*? Trajectory from the first checkpoint to the latest, with drift indicators. |
 | `/continuous-code-auditor-status` | Read-only: paused/held state, lock state, last run, findings summary. |
 | `/continuous-code-auditor-start` | Resume scheduled execution (clears the pause flag). |
 | `/continuous-code-auditor-stop` | Pause scheduled execution (doesn't interrupt a run already in progress). |
@@ -145,7 +146,17 @@ Every adapter's flags were checked against real `--help` output or official docs
 | `/continuous-code-auditor-uninstall` | Removes scheduling and skill registration. Leaves audit data alone unless `--purge-data`. |
 | `/continuous-code-auditor-reset` | **Destructive to the session, not to history**: archives everything into a timestamped `work/archives/<ts>/` snapshot, then reinitializes `work/` fresh. Requires explicit confirmation. `work/archives/` itself is never touched beyond adding that snapshot. |
 
-Claude Code and Gemini CLI get these as real, tab-completing slash commands (installed by `installer/install.sh`). Every other CLI — and a plain terminal, any time — gets the same eight operations via `scripts/commands/<name>.sh` directly, or by asking your agent in plain language ("what's the audit status", "pause the auditor"); `SKILL.md`'s universal fallback recognizes both. See [`commands/README.md`](commands/README.md) for the full mechanism per CLI.
+Claude Code and Gemini CLI get these as real, tab-completing slash commands (installed by `installer/install.sh`). Every other CLI — and a plain terminal, any time — gets the same nine operations via `scripts/commands/<name>.sh` directly, or by asking your agent in plain language ("what's the audit status", "pause the auditor"); `SKILL.md`'s universal fallback recognizes both. See [`commands/README.md`](commands/README.md) for the full mechanism per CLI.
+
+## Alignment: is this still doing what it's for?
+
+Correctness and *purpose* are different questions, and only the first one fails loudly. Over months of unattended running, an auditor can be perfectly correct and still slowly stop being useful — escalating things the project has explicitly decided not to care about, or quietly ignoring the one thing that must never break.
+
+- **`config/charter.md`** (from `charter.md.example`) states purpose, non-goals, what must never break, acceptable trade-offs, current phase, and intended direction. **A human writes it. The auditor may read and cite it; it may never write to it** — a model that can revise its own alignment target cannot measure its own drift, and would report "aligned" forever.
+- **`scripts/checkpoint.sh`** records a deterministic hourly snapshot — no model call, so the measurement can't drift alongside the thing being measured, and a year of collection costs nothing.
+- **`/continuous-code-auditor-alignment`** derives the trajectory from the first checkpoint to the latest: converging or diverging, contradiction-flag growth, parked decisions accumulating, audits silently not running, audit scope expanding. The baseline checkpoint is stored separately and never pruned — "initial to latest" is the entire question, so losing the initial point would defeat it.
+
+The numbers are mechanical; the judgement is the model's, made against the charter's prose and written to `work/alignment_review.md` — never back into the charter.
 
 ## Installation
 
@@ -263,7 +274,7 @@ All four run in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) on every 
 
 ## Stability & versioning
 
-`v1.0.0` onward is a frozen, stable contract rather than an evolving prototype — see [`CHANGELOG.md`](CHANGELOG.md). Specifically frozen: the adapter hook interface in `scripts/lib/reliability.sh` (`invoke_agent`, `extract_session_id`, `classify_failure`, `agent_specific_preflight`, `extract_cost_usd`), the structured exit-code table, and the eight operational commands' CLI surface. Breaking changes to any of those bump the major version. The biggest deferred idea — generalizing beyond code auditing into a domain-agnostic auditing framework (security, docs, infra, compliance, …) — turns out to need less engine rework than it sounds like, since the reliability engine already has almost zero code-specific coupling; it's still a deliberate v2.0.0-scale identity decision, not a quick add. That and everything else deferred to keep the released versions stable are tracked in [`ROADMAP.md`](ROADMAP.md) rather than half-built into this one.
+`v1.0.0` onward is a frozen, stable contract rather than an evolving prototype — see [`CHANGELOG.md`](CHANGELOG.md). Specifically frozen: the adapter hook interface in `scripts/lib/reliability.sh` (`invoke_agent`, `extract_session_id`, `classify_failure`, `agent_specific_preflight`, `extract_cost_usd`), the structured exit-code table, and the nine operational commands' CLI surface. Breaking changes to any of those bump the major version. The biggest deferred idea — generalizing beyond code auditing into a domain-agnostic auditing framework (security, docs, infra, compliance, …) — turns out to need less engine rework than it sounds like, since the reliability engine already has almost zero code-specific coupling; it's still a deliberate v2.0.0-scale identity decision, not a quick add. That and everything else deferred to keep the released versions stable are tracked in [`ROADMAP.md`](ROADMAP.md) rather than half-built into this one.
 
 ## License
 

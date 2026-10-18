@@ -34,6 +34,15 @@ if command -v systemctl >/dev/null 2>&1; then
       echo "removed the systemd unit files"
     fi
   fi
+  if systemctl list-unit-files 2>/dev/null | grep -q "^continuous-code-auditor-checkpoint.timer"; then
+    systemctl disable --now continuous-code-auditor-checkpoint.timer 2>/dev/null \
+      && echo "disabled and stopped continuous-code-auditor-checkpoint.timer" \
+      || echo "note: could not disable continuous-code-auditor-checkpoint.timer (permissions? try with sudo)"
+    if [[ -w /etc/systemd/system ]]; then
+      rm -f /etc/systemd/system/continuous-code-auditor-checkpoint.service /etc/systemd/system/continuous-code-auditor-checkpoint.timer
+      systemctl daemon-reload 2>/dev/null || true
+    fi
+  fi
   if systemctl list-unit-files 2>/dev/null | grep -q "^continuous-code-auditor-watchdog.timer"; then
     systemctl disable --now continuous-code-auditor-watchdog.timer 2>/dev/null \
       && echo "disabled and stopped continuous-code-auditor-watchdog.timer" \

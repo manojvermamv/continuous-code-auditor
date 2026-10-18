@@ -100,7 +100,11 @@ def main():
     #   - references/domain-focus.md: optional, created by the deployer if they
     #     want deployment-specific risk categories — SKILL.md explicitly treats
     #     its absence as the normal case ("if this file exists...").
-    EXPECTED_ABSENT = {"config/auditor.conf", "references/domain-focus.md"}
+    #   - config/charter.md: per-deployment and human-authored, from
+    #     charter.md.example. Shipping one would defeat the point — the
+    #     charter must be written by the people whose project it describes.
+    EXPECTED_ABSENT = {"config/auditor.conf", "references/domain-focus.md",
+                       "config/charter.md"}
 
     for rel in re.findall(r"`((?:references|scripts|adapters|commands|config)/[\w./-]+)`", text):
         if rel in EXPECTED_ABSENT:

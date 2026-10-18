@@ -1,0 +1,89 @@
+# Project Charter — <your project name>
+
+> **This file is written and owned by a human, not by the auditor.**
+>
+> That is the single most important property of this system. Alignment is
+> measured *against* this document. If the model were allowed to author or
+> revise its own alignment target, drift would be structurally undetectable —
+> the model would simply update the goal to match whatever it had drifted
+> toward, and every report would say "aligned" forever. A self-graded
+> alignment check is not a weak check; it is not a check at all.
+>
+> The auditor may READ this file, cite it, and report divergence from it.
+> It must never write to it. `scripts/commands/alignment.sh` verifies the
+> file's hash is stable and flags any change for human confirmation.
+>
+> Copy this to `config/charter.md` and fill it in. Keep it short — a charter
+> nobody rereads is a charter nobody follows. One page is plenty.
+
+---
+
+## Purpose
+
+*What is this codebase for? One or two sentences, in plain language. Not the
+architecture — the reason it exists.*
+
+Example: "Executes options-buying strategies against a live broker during
+NSE market hours. Real money moves through it."
+
+## Non-goals
+
+*What this project deliberately is NOT trying to be. This is often more
+useful for alignment than the goals — it's what stops the auditor spending
+months on things that were never the point.*
+
+Example:
+- Not a backtesting framework; historical accuracy is out of scope.
+- Not a general trading library; single-strategy only, by choice.
+- Not optimized for latency below the broker's own round-trip.
+
+## What must never break
+
+*Ranked. The auditor weights findings against this list — it is the
+practical definition of "severe" for this project specifically.*
+
+Example:
+1. Never place an order the risk limits should have blocked.
+2. Never lose or double-count a fill.
+3. Never report a position that disagrees with the broker's.
+4. Never silently swallow a broker error.
+
+## Acceptable trade-offs
+
+*What you are knowingly willing to live with. Findings in these areas should
+be reported at low severity, not escalated — and if the auditor keeps
+escalating them, that is drift worth catching.*
+
+Example:
+- Verbose logging over log volume.
+- Duplicated validation between layers, for defence in depth.
+- Startup latency; the process runs all day.
+
+## Current phase
+
+*Where the project is right now, and what "good" looks like this quarter.
+Update this when it genuinely changes — each update is a checkpoint boundary
+the alignment report will show.*
+
+Example: "Hardening before increasing position size. Correctness and
+recoverability matter more than new features or performance."
+
+## Direction — where this is heading
+
+*The intended trajectory. The alignment report compares observed movement
+against this.*
+
+Example: "Toward fewer, better-tested code paths. Reducing surface area, not
+adding capability."
+
+---
+
+## Charter revision log
+
+*Append a line whenever this file changes. The alignment system treats a
+charter change as a deliberate re-baselining, not drift — but only if it's
+recorded here, so an unexplained edit stays visible.*
+
+| Date | What changed | Why |
+|---|---|---|
+| YYYY-MM-DD | Initial charter | Project baseline |

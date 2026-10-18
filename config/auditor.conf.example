@@ -103,6 +103,19 @@ MAX_LOAD_PER_CPU=4.0
 # the default (30) assumes a 5-minute main schedule.
 WATCHDOG_MAX_STALE_MINUTES=30
 
+# --- Alignment: project charter ---
+# The human-authored statement of what this project is FOR. Alignment is
+# measured against it. The auditor may read and cite it; it must NEVER write
+# to it — a model that can revise its own alignment target cannot measure its
+# own drift. Start from config/charter.md.example.
+CHARTER_FILE="config/charter.md"
+
+# How many hourly checkpoints to keep in work/checkpoints/timeline.jsonl.
+# The BASELINE checkpoint lives in its own file and is never pruned — the
+# whole question is "initial to latest", so losing the initial point would
+# defeat the system. ~2000 is about 3 months of hourly collection.
+CHECKPOINT_RETENTION=2000
+
 # --- Log format ---
 # "text" (default) writes the human-readable auditor.log only.
 # Include "json" (e.g. "text,json" or just "json") to ALSO write

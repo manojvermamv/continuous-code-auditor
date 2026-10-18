@@ -131,6 +131,10 @@ MIN_FREE_DISK_MB=100
 MAX_LOAD_PER_CPU=4.0
 # MIN_FREE_MEM_MB=512          # opt-in; uses MemAvailable
 
+# --- alignment (see config/charter.md.example) ---
+CHARTER_FILE="config/charter.md"
+CHECKPOINT_RETENTION=2000
+
 # --- logging ---
 # Add "json" (e.g. "text,json") to also emit logs/auditor.jsonl for a log
 # pipeline. auditor.log is always written either way.
@@ -266,9 +270,13 @@ case "$SCHEDULE" in
       sed "s|/opt/auditor/continuous-code-auditor|$SKILL_DIR|g" \
         "$SKILL_DIR/scripts/systemd/continuous-code-auditor-watchdog.service" > /etc/systemd/system/continuous-code-auditor-watchdog.service
       cp "$SKILL_DIR/scripts/systemd/continuous-code-auditor-watchdog.timer" /etc/systemd/system/continuous-code-auditor-watchdog.timer
+      sed "s|/opt/auditor/continuous-code-auditor|$SKILL_DIR|g" \
+        "$SKILL_DIR/scripts/systemd/continuous-code-auditor-checkpoint.service" > /etc/systemd/system/continuous-code-auditor-checkpoint.service
+      cp "$SKILL_DIR/scripts/systemd/continuous-code-auditor-checkpoint.timer" /etc/systemd/system/continuous-code-auditor-checkpoint.timer
       systemctl daemon-reload
       systemctl enable --now continuous-code-auditor.timer
       systemctl enable --now continuous-code-auditor-watchdog.timer
+      systemctl enable --now continuous-code-auditor-checkpoint.timer
       echo "installed and enabled continuous-code-auditor.timer and continuous-code-auditor-watchdog.timer"
       echo "the watchdog runs independently — see references/workspace-and-execution.md 'Scheduler-liveness watchdog' for why it's a separate unit, not part of the main one."
       echo "review /etc/systemd/system/continuous-code-auditor.service — the User=auditor account must exist and be able to read $SKILL_DIR and write $PROJECT and $LOG_DIR."

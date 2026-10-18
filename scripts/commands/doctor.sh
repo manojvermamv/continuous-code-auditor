@@ -341,6 +341,24 @@ else
   warn "work/ does not exist yet" "created on first run, or by installer/install.sh"
 fi
 
+# ---------------------------------------------------------- alignment ----
+section "Alignment"
+CHARTER="${CHARTER_FILE:-$SKILL_DIR/config/charter.md}"
+[[ "$CHARTER" != /* ]] && CHARTER="$SKILL_DIR/$CHARTER"
+if [[ -f "$CHARTER" ]]; then
+  pass "charter present ($CHARTER)"
+else
+  warn "no project charter — trajectory can be measured but not judged" \
+       "cp $SKILL_DIR/config/charter.md.example $SKILL_DIR/config/charter.md and fill it in. It must be written by a human: a model that can revise its own alignment target cannot measure its own drift."
+fi
+if [[ -s "$PROJECT/work/checkpoints/timeline.jsonl" ]]; then
+  CP_N="$(wc -l < "$PROJECT/work/checkpoints/timeline.jsonl" | tr -d " ")"
+  pass "$CP_N alignment checkpoint(s) recorded"
+else
+  warn "no alignment checkpoints yet" \
+       "run $SKILL_DIR/scripts/checkpoint.sh once, and enable continuous-code-auditor-checkpoint.timer for hourly collection"
+fi
+
 # ---------------------------------------------------------- scheduling ---
 section "Scheduling"
 sched_found=false

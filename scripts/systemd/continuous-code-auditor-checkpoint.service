@@ -1,0 +1,16 @@
+[Unit]
+Description=Continuous code auditor — hourly alignment checkpoint
+
+[Service]
+Type=oneshot
+ExecStart=/opt/auditor/continuous-code-auditor/scripts/checkpoint.sh
+TimeoutStartSec=60
+
+# Cheap and deterministic: no model call, no network, no lock. It only reads
+# the workspace and appends one line to its own checkpoint file.
+User=auditor
+Group=auditor
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/srv/your-project/work /opt/auditor/logs

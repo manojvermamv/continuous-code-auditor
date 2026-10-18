@@ -2,6 +2,24 @@
 
 All notable changes to this project are documented here. Format loosely follows [Keep a Changelog](https://keepachangelog.com/); versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.8.0] — alignment checkpoints: is the audit still serving the project's purpose?
+
+A new capability rather than a refinement. Everything before this checked whether the code is *correct*; nothing checked whether the audit still serves what the project is *for*. That failure is slow, silent, and only visible over months — precisely the window this system runs in unattended.
+
+### The core design constraint
+**The charter is human-owned and the auditor may never write to it.** If the model could author or revise its own alignment target, drift would be structurally undetectable: it would move the goal to wherever it had drifted and report "aligned" forever. A self-graded alignment check is not a weak check, it is not a check at all. This is enforced in `SKILL.md`, in the command prompts for both CLIs, and by a test asserting the charter's hash is unchanged after a full checkpoint + alignment cycle.
+
+### Added
+- **`config/charter.md.example`** — human-authored statement of purpose, non-goals, what must never break, acceptable trade-offs, current phase, and intended direction. Deliberately one page: a charter nobody rereads is a charter nobody follows.
+- **`scripts/checkpoint.sh`** — hourly deterministic snapshot, appended to `work/checkpoints/timeline.jsonl`. **Contains no model call**, for three reasons: cost (8,760 invocations a year), determinism (a trajectory built from model judgements drifts alongside what it measures, so you could not separate project drift from measurement drift), and independence (the numbers are collected identically regardless of what the model believes about its own performance).
+- **`/continuous-code-auditor-alignment`** — ninth operational command. Derives direction from baseline to latest: converging vs. diverging, contradiction-flag growth, parked decisions accumulating, execution count flat while checkpoints tick (audits silently not running), and audit-scope expansion.
+- **Baseline protection.** The first checkpoint is written once to its own file and never pruned by timeline retention — "initial to latest" is the whole question, so the initial point must be structurally impossible to lose. Same reasoning as the evidence guard in archive retention.
+- Charter-change detection: an edited charter is reported as deliberate re-baselining, not silently absorbed, so an unexplained edit stays visible.
+- `SKILL.md` "Alignment review", hourly systemd service+timer, doctor reporting, installer/uninstall wiring, and twelve tests.
+
+### Fixed during implementation
+- `grep -c` prints `0` *and* exits non-zero when nothing matches, so a `|| echo 0` fallback emitted a second zero — silently corrupting every checkpoint record into invalid JSON. Caught immediately by validating records rather than assuming them.
+
 ## [1.7.0] — verified adapter capability matrix
 
 Implements ROADMAP item #1, the last low-risk item. Built with behavioral verification rather than as documentation, because a hand-maintained matrix describing code is accurate exactly once.

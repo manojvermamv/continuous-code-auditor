@@ -301,6 +301,60 @@ check "load gate: can be disabled with an empty MAX_LOAD_PER_CPU" "0" "$?"
 cp "$TMP_ROOT/conf.noload" "$CONFIG"
 
 echo
+echo "-- alignment: hourly checkpoints and trajectory (v1.8.0) --"
+CP_DIR="$PROJECT/work/checkpoints"
+rm -rf "$CP_DIR"
+write_config "opencode"
+CHARTER="$TMP_ROOT/charter.md"
+echo "CHARTER_FILE=\"$CHARTER\"" >> "$CONFIG"
+printf '# Charter\nPurpose: test project\n' > "$CHARTER"
+CHARTER_HASH_BEFORE="$(sha256sum "$CHARTER" | cut -d' ' -f1)"
+
+printf 'F-0001 Open\n' > "$PROJECT/work/continuous_code_audit_findings.md"
+bash "$SKILL_DIR/scripts/checkpoint.sh" >/dev/null 2>&1
+check "checkpoint: creates a baseline" "0" "$([[ -s "$CP_DIR/baseline.json" ]]; echo $?)"
+check "checkpoint: appends to the timeline" "0" "$([[ -s "$CP_DIR/timeline.jsonl" ]]; echo $?)"
+check "checkpoint: records are valid JSON" "0" "$(python3 -c "
+import json
+for l in open('$CP_DIR/timeline.jsonl'):
+    if l.strip(): json.loads(l)
+" >/dev/null 2>&1; echo $?)"
+
+# The baseline must survive everything — 'initial to latest' depends on it.
+BASELINE_BEFORE="$(cat "$CP_DIR/baseline.json")"
+printf 'F-0001 Open\nF-0002 Open\nF-0003 Open\n' > "$PROJECT/work/continuous_code_audit_findings.md"
+for _ in 1 2 3; do bash "$SKILL_DIR/scripts/checkpoint.sh" >/dev/null 2>&1; done
+check "checkpoint: baseline is never rewritten by later checkpoints" "$BASELINE_BEFORE" "$(cat "$CP_DIR/baseline.json")"
+
+# Baseline must survive timeline retention too.
+echo 'CHECKPOINT_RETENTION=2' >> "$CONFIG"
+for _ in 1 2 3; do bash "$SKILL_DIR/scripts/checkpoint.sh" >/dev/null 2>&1; done
+check "checkpoint: retention trims the timeline" "2" "$(wc -l < "$CP_DIR/timeline.jsonl" | tr -d ' ')"
+check "checkpoint: baseline survives timeline retention" "0" "$([[ -s "$CP_DIR/baseline.json" ]]; echo $?)"
+sed -i '/^CHECKPOINT_RETENTION=/d' "$CONFIG"
+
+# Trajectory + drift detection
+bash "$SKILL_DIR/scripts/commands/alignment.sh" >"$TMP_ROOT/align.txt" 2>&1
+check "alignment: computes a trajectory" "0" "$?"
+check "alignment: detects divergence (opened, none resolved)" "0" "$(grep -q 'DIVERGING' "$TMP_ROOT/align.txt"; echo $?)"
+check "alignment: reports the baseline->latest window" "0" "$(grep -q 'baseline -> latest' "$TMP_ROOT/align.txt"; echo $?)"
+
+# THE critical property: nothing in the alignment path may modify the charter.
+check "alignment: charter is never modified by checkpoint or alignment" "$CHARTER_HASH_BEFORE" "$(sha256sum "$CHARTER" | cut -d' ' -f1)"
+
+# A charter edit must be surfaced as re-baselining, not silently absorbed.
+printf '# Charter\nPurpose: CHANGED\n' > "$CHARTER"
+bash "$SKILL_DIR/scripts/commands/alignment.sh" >"$TMP_ROOT/align2.txt" 2>&1
+check "alignment: flags a charter change since baseline" "0" "$(grep -q 'CHANGED' "$TMP_ROOT/align2.txt"; echo $?)"
+
+# Missing charter must degrade honestly, not invent an intent.
+rm -f "$CHARTER"
+bash "$SKILL_DIR/scripts/commands/alignment.sh" >"$TMP_ROOT/align3.txt" 2>&1
+check "alignment: says plainly it cannot judge without a charter" "0" "$(grep -qi 'without a stated intent\|MISSING: no charter' "$TMP_ROOT/align3.txt"; echo $?)"
+rm -rf "$CP_DIR"; sed -i '/^CHARTER_FILE=/d' "$CONFIG"
+rm -f "$PROJECT/work/continuous_code_audit_findings.md"
+
+echo
 echo "-- adapter capability matrix is verified against real behavior (v1.7.0) --"
 bash "$SKILL_DIR/tests/verify_capabilities.sh" "$SKILL_DIR" >"$TMP_ROOT/cap.txt" 2>&1
 check "capabilities.json matches observed adapter behavior" "0" "$?"
