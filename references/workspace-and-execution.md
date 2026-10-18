@@ -20,6 +20,8 @@ This file covers everything needed to understand *where things live* and *how on
         metrics.json
         heartbeat.json
         candidate_fixes.md
+        source_snapshots/                                        (stable per-run source copies; bounded retention)
+            current.json                                         (path + source hash for the latest snapshot)
         archives/                                               (reset-time snapshots only — see
                                                                     "The /reset command" below. Never the
                                                                     same thing as the source archives/ below.
@@ -81,6 +83,9 @@ Making the queues explicit is what makes each execution's behavior deterministic
 ```json
 {
   "schema_version": 4,
+  "execution_id": "2026-10-19T04:00:00Z-<unique-suffix>",
+  "report_generation": "2026-10-19T04:00:00Z-<unique-suffix>",
+  "completed_areas": [],
   "active_task": null,
   "pending_tasks": [],
   "verification_queue": ["F-0012", "F-0019"],
@@ -93,6 +98,10 @@ Making the queues explicit is what makes each execution's behavior deterministic
     "type": "file",
     "targets": ["BuyerEdgeStrategy.py"],
     "combined_sha256": "…",
+    "snapshot_path": "work/source_snapshots/…",
+    "snapshot_targets": ["…/payload/targets/0/BuyerEdgeStrategy.py"],
+    "git_commit": "…",
+    "git_dirty": false,
     "file_count": 1,
     "compiles": true,
     "last_refreshed": "2026-07-18T04:00:00Z",
@@ -103,7 +112,19 @@ Making the queues explicit is what makes each execution's behavior deterministic
 
 `maintenance` is what turns "every 50 executions or 24 hours" (§6/§8/§11 in `references/consistency-and-safeguards.md`) from something you'd otherwise have to recall across dozens of stateless executions into two numbers you check and update anyway. Increment `executions_since_periodic_check` every run; when it reaches 50, or `last_periodic_check_at` is more than 24 hours in the past, run the periodic checks and reset both fields. Don't estimate or round — this is exactly the kind of arithmetic a long-running, memoryless process should never trust to recollection.
 
-`source.type` is one of `file`, `files`, or `directory`, matching whatever `AUDIT_TARGET` resolved to (see `config/auditor.conf`). `targets` lists the actual path(s) — one entry for `file`, several for `files`, the directory root for `directory`. `combined_sha256` is that file's hash for a single file, or a hash of a sorted manifest (path + per-file hash, one line each) for `files`/`directory` — the point is that any change anywhere in scope changes this value, not that it's individually reversible. `compiles` may be a single boolean or, for `files`/`directory` targets where some files have a checker and others don't, a short per-file map — record what's actually true rather than forcing a single boolean that hides which files were skipped. `archive_path` points at a single-file copy for `file` targets or a tarball for `files`/`directory` targets, in the project's top-level `archives/` (not `work/archives/` — see the directory layout above).
+The wrapper creates source snapshots with `scripts/create_source_snapshot.py` before invoking the model. For a single file, `files` target, or directory, `targets` remains the original configured path list and `snapshot_targets` records the matching copied paths. `combined_sha256` is the exact manifest hash passed as `AUDIT_SOURCE_HASH`; it includes relative path names and content hashes. The helper reuses a snapshot when its manifest is unchanged and rejects a copy if the source changed during snapshot creation. It retains at least two and by default 10 recent snapshots (`SOURCE_SNAPSHOT_RETENTION_COUNT`). Whole-project snapshots exclude top-level `work/`, `archives/`, `backups/`, and `.git/`; symlinks are recorded as links and are not followed. When the source changes, the model archives the prior snapshot for diffing; findings must cite the current snapshot hash.
+
+### Crash-safe report publication
+
+Individual files are replaced atomically, but the register, closure report, and state cannot be renamed as one portable filesystem operation. Treat their update as a recoverable publication:
+
+1. Before finalizing, create `work/publication_recovery/<execution_id>/` containing the current register, closure report, and `audit_state.json` (or explicit `absent` markers). Build it under a temporary name and rename the complete directory into place.
+2. Stage the next register and closure report in `work/pending_publication/<execution_id>/`. Both must carry the same `**Audit generation:** <execution_id>` line and source hash. Validate that statuses and findings agree before publishing.
+3. Atomically replace the register and closure report from the staged copies. Save `audit_state.json` last with the same `report_generation` ID.
+4. On startup, compare report generation IDs with the state. If they disagree, restore the prior files from the latest recovery snapshot before resuming the saved task. If a pre-generation installation has no generation markers yet, keep the existing reports as the legacy generation and add markers at its next successful publication. Never continue discovery on a mixed generation.
+5. Remove recovery/staging snapshots only after a later run confirms the published files and state still agree. Keep the prior recovery snapshot until then.
+
+This is a recovery protocol, not a claim that three files change atomically. A process kill between renames leaves enough information to return to the previous consistent generation.
 
 - `active_task` — the one task currently in progress, or `null`. If non-null on load, that's the interrupted task from the previous run — resume it before anything else.
 - `pending_tasks` — work that's been identified but not started.
@@ -156,7 +177,7 @@ Load audit_state.json
 "What was I doing previously?" — resume unfinished work first
   │
   ▼
-Check active source hash against last-known hash
+  Read the wrapper-created source snapshot and record its identity
   │
   ├── changed → archive previous version, diff, determine which
   │              findings are affected, re-verify only those
@@ -227,6 +248,8 @@ Key points that apply regardless of which CLI is configured:
 - **Session continuity is explicit per-adapter, never assumed to be free.** Each CLI handles multi-turn continuity differently (some need an explicit captured id, some have their own "resume latest" concept, some barely document it) — see the specific adapter. In every case this is a cost/context optimization only: SKILL.md's "no conversational memory assumed" design means audit correctness never depends on it working.
 - **Don't copy one CLI's failure-detection heuristic onto another.** For example, treating non-empty stderr as a failure is correct and documented for opencode, but would misfire constantly on a CLI that streams normal progress to stderr by design (Codex CLI does this) — each runner's `classify_failure()` is CLI-specific for exactly this reason.
 - **Lock first.** A run that takes longer than the schedule interval must not overlap with the next trigger. `flock -n <lockfile>` in `scripts/lib/reliability.sh` is the standard mechanism — if the lock is already held, the new invocation exits immediately without touching anything.
+- **Audit a snapshot, not a moving checkout.** Before invoking the agent, `scripts/create_source_snapshot.py` copies the configured target, hashes the copied content, checks that the source did not change during the copy, and passes the snapshot paths and hash through `AUDIT_CONTEXT`. The snapshot helper excludes top-level `work/`, `archives/`, `backups/`, and `.git/` for a whole-project target. It preserves symlinks without following them; those links are outside the content evidence unless separately configured as targets.
+- **Progress is write-ahead.** Before starting a discrete audit task, persist its ID and exact next action in `active_task`; after each completed unit, atomically persist the completed area and updated queues. Do not wait until the end of the invocation to save progress. If the source hash changes between load and final review, leave the task pending and do not publish findings from that run.
 - **Lock metadata, not just the lock itself.** The library writes a small companion file (`<lockfile>.meta`) with the holder's PID, hostname, and start time the moment it acquires the lock, and cleans it up on exit. A bare `flock` tells you *that* something else holds it; the metadata tells you *what* — which is what you actually want when deciding whether a long-running execution is legitimately still working or actually stuck.
 - **Enforce it twice.** The lock file is a mechanical safeguard, not a substitute for the model-level rule in `SKILL.md` ("never execute more than one audit instance against the same workspace... terminate immediately without modifying any state files") — either one failing shouldn't corrupt state.
 - **Capture failure, don't just log it.** On a non-zero exit (model timeout, token limit, interrupted run), the library records that in the workspace *before* the process exits, so the next execution's "what was I doing previously?" step sees the failure and can factor it in rather than repeating it blindly.
@@ -248,7 +271,7 @@ Key points that apply regardless of which CLI is configured:
 | `14` | Deferred — host under resource pressure (load/memory); self-clearing, retried next tick | library |
 | `15` | Preflight/config failure (CLI missing, `MODEL_NAME` never configured, skill not installed where the CLI expects, bad paths) | library / adapter preflight |
 | `20` | Active source failed to compile | model, via sentinel below |
-| `30` | A configured source fetch failed | model, via sentinel below |
+| `30` | Source snapshot could not be created or the source changed during copy | wrapper, or model via sentinel below |
 | `40` | Generic prompt/model-side failure not covered by the above | library (fallback) |
 | `50` | State recovery was invoked this run (may co-occur with an otherwise-successful run — still worth flagging to monitoring) | model, via sentinel below |
 | `1` | Unrecognized non-zero failure (e.g. an unrelated shell error inside the wrapper itself) | library (fallback) |
@@ -290,7 +313,7 @@ Description=Continuous code auditor (single execution)
 [Service]
 Type=oneshot
 ExecStart=/opt/auditor/continuous-code-auditor/scripts/run_auditor.sh
-TimeoutStartSec=240
+TimeoutStartSec=300
 # --- least-privilege, even when the host is root-administered ---
 User=auditor
 Group=auditor
@@ -332,7 +355,7 @@ The box being root-administered doesn't mean the audit process itself needs to r
 
 ### Resource ceilings and timeouts
 
-- Wall-clock timeout per execution (`TimeoutStartSec=` above, or `timeout 240 ...` if staying on plain cron) so a single hung run can't block indefinitely — `flock -n` already keeps a hung run from blocking *new* executions, but the hung one should still be able to self-terminate.
+- Wall-clock timeout per execution (`TimeoutStartSec=` above, or `timeout 300 ...` if staying on plain cron) so a single hung run can't block indefinitely — `flock -n` already keeps a hung run from blocking *new* executions, but the hung one should still be able to self-terminate.
 - Memory/CPU ceilings (`MemoryMax=`, `CPUQuota=`) so a runaway execution can't degrade the rest of the server.
 
 ### Log and archive retention

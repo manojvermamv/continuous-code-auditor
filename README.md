@@ -17,7 +17,7 @@ Point-in-time code reviews go stale the moment the code changes again. This skil
 - **It tracks its own mistakes.** Duplicate findings, false positives, and unnecessary re-audits get logged to a structured mistake ledger and checked against before repeating.
 - **It audits whatever you point it at.** One file, several named files, or a whole project tree — configured once in `config/auditor.conf`, not hardcoded to a specific project.
 - **It isn't married to one AI product.** The reliability engine (locking, circuit breaker, structured exit codes) is completely agent-agnostic; only a thin per-CLI adapter differs. Today: opencode, Claude Code, Gemini CLI, Codex CLI, and Hermes Agent. Adding another is one new file, documented in [`adapters/README.md`](adapters/README.md).
-- **It has an operational control surface, not just an audit loop.** `status`, `start`, `stop`, `archive`, `backup-everything`, `uninstall`, and `reset` are real commands — native slash commands where the CLI supports it, and always available as plain scripts otherwise.
+- **It has an operational control surface, not just an audit loop.** `doctor`, `alignment`, `status`, `start`, `stop`, `archive`, `backup-everything`, `uninstall`, and `reset` are real commands — native slash commands where the CLI supports it, and always available as plain scripts otherwise.
 
 ## Architecture at a glance
 
@@ -52,6 +52,7 @@ continuous-code-auditor/
 ├── scripts/
 │   ├── lib/reliability.sh        ← CLI-agnostic engine: lock, circuit breaker, exit codes, pause/hold
 │   ├── runners/                  ← one adapter script per supported agent CLI
+│   ├── create_source_snapshot.py ← stable, hashed source input for each run
 │   ├── commands/                 ← the nine operational commands (doctor/alignment/status/…)
 │   └── run_auditor.sh            ← thin dispatcher
 ├── commands/                 ← native slash-command files per CLI (Claude Code, Gemini CLI)
@@ -73,6 +74,7 @@ THE RUNTIME WORKSPACE (created per-deployment, lives with the audited project �
 │   ├── negative_knowledge.json      (specific rejected findings, so they aren't re-raised)
 │   ├── metrics.json / heartbeat.json
 │   ├── candidate_fixes.md
+│   ├── source_snapshots/             ← stable source copies; latest identity in current.json
 │   └── archives/                    ← reset-time snapshots ONLY — see /reset below. Protected: this
 │                                        directory is never itself reset or deleted.
 ├── archives/                    ← one archived source snapshot per refresh (file copy or tarball)
@@ -118,7 +120,9 @@ AUDIT_TARGET="src/orders.py src/risk.py src/broker.py" # several named files, tr
 AUDIT_TARGET="."                                        # the whole project tree
 ```
 
-All three are hashed, archived, and (where a checker exists for the language involved) compile/lint-checked the same way — see `SKILL.md`'s "Source loading and versioning". The core risk categories (concurrency, security boundaries, data integrity, error handling, external I/O) are generic; if you want deployment-specific risk areas weighted just as heavily (e.g. a trading system's order lifecycle and position accounting), add them to `references/domain-focus.md` — `SKILL.md` reads that file, if present, as required additional focus.
+All three are snapshotted and hashed before the model runs; changed snapshots preserve the previous version for diffing. Where a checker exists for the language involved, it is run against the active snapshot. See `SKILL.md`'s "Source loading and versioning". The core risk categories (concurrency, security boundaries, data integrity, error handling, external I/O) are generic; if you want deployment-specific risk areas weighted just as heavily (e.g. a trading system's order lifecycle and position accounting), add them to `references/domain-focus.md` — `SKILL.md` reads that file, if present, as required additional focus.
+
+Each scheduled invocation reads a stable, hashed copy from `work/source_snapshots/`. The wrapper verifies the source did not change during the copy and reuses the current snapshot when its content hash is unchanged. Findings cite original project paths plus that snapshot hash. Whole-project snapshots exclude top-level `.git/`, `work/`, `archives/`, and `backups/`; symlinks are preserved but not followed.
 
 ## Supported agent CLIs
 
@@ -130,7 +134,7 @@ All three are hashed, archived, and (where a checker exists for the language inv
 | [Codex CLI](https://developers.openai.com/codex) | [adapters/codex-cli.md](adapters/codex-cli.md) | `~/.codex/skills/` or `.codex/skills/` | no (deprecated/uncertain mechanism) — universal fallback |
 | [Hermes Agent](https://github.com/NousResearch/hermes-agent) | [adapters/hermes.md](adapters/hermes.md) | `~/.hermes/skills/<category>/`, explicit `-s` preload | no — universal fallback |
 
-Every adapter's flags were checked against real `--help` output or official docs at the time it was written, and every one was actually run against a mocked CLI binary before being trusted — see [`adapters/README.md`](adapters/README.md) for the contract if you want to add a sixth.
+Every adapter's flags were checked against real `--help` output or official docs when added, and every one was run against a mocked CLI binary. Run `doctor` after installing or upgrading an agent CLI to record its installed version; re-check the adapter against that CLI version because mocks do not establish ongoing vendor compatibility. See [`adapters/README.md`](adapters/README.md) to add another adapter.
 
 ## Operational commands
 
@@ -229,7 +233,7 @@ sudo systemctl enable --now continuous-code-auditor.timer
 */5 * * * * /opt/auditor/continuous-code-auditor/scripts/run_auditor.sh >> /opt/auditor/logs/cron.log 2>&1
 ```
 
-Both call the same dispatcher, so the reliability behavior (locking, circuit breaker, pause/hold, structured exit codes) is identical either way. See the "Deployment hardening" section of [`references/workspace-and-execution.md`](references/workspace-and-execution.md) for least-privilege systemd sandboxing, log/archive retention, and the full exit-code contract.
+Both call the same dispatcher, so the reliability behavior (locking, circuit breaker, pause/hold, structured exit codes) is identical either way. The scheduled implementation currently targets Linux: it uses Bash, `flock`, Python 3, and GNU/Linux utilities; the systemd units are Linux-specific. See the "Deployment hardening" section of [`references/workspace-and-execution.md`](references/workspace-and-execution.md) for systemd setup, retention, and the full exit-code contract.
 
 ## Safety: what this skill will and won't do
 

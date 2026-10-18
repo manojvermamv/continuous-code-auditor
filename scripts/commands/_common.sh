@@ -2,7 +2,7 @@
 # scripts/commands/_common.sh
 #
 # Sourced by every script in this directory — not meant to be run directly
-# (hence the leading underscore, so it doesn't look like one of the seven
+# (hence the leading underscore, so it doesn't look like one of the commands
 # operational commands). Loads config/auditor.conf the same way the runners
 # do, and defines the paths every command needs.
 
@@ -38,4 +38,23 @@ sanitize_label() {
   # this fix: a label of "../../../../tmp/x" made archive.sh write outside
   # work/archives/ entirely.
   printf '%s' "$1" | tr -cd 'A-Za-z0-9_-'
+}
+
+# Acquire the same deployment lock used by the scheduled auditor before an
+# operational command reads or changes a multi-file workspace snapshot.
+# The lock descriptor stays open for the lifetime of the calling script.
+acquire_workspace_lock() {
+  if ! command -v flock >/dev/null 2>&1; then
+    echo "flock is required to coordinate this command with scheduled runs." >&2
+    exit 1
+  fi
+  exec 201>"$LOCK"
+  if ! flock -n 201; then
+    if [[ -s "$LOCK.meta" ]]; then
+      echo "workspace is busy: $(cat "$LOCK.meta")" >&2
+    else
+      echo "workspace is busy: another auditor operation holds the lock" >&2
+    fi
+    exit 10
+  fi
 }

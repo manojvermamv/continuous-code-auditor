@@ -24,6 +24,59 @@ This keeps effort proportional on a large codebase instead of spending the same 
 
 Every finding needs: evidence, the exact file, the exact lines, an explanation, and the impact. No evidence, no finding — never speculate or invent behavior the source doesn't support.
 
+Use one finding record per Markdown heading and keep the metadata field on its own line. The checkpoint collector counts only the exact `**Status:** Open`-style field, so status words in prose do not alter trend measurements. Minimum record shape:
+
+```markdown
+### F-0001 — Short title
+
+**Audit generation:** <execution_id>
+**Status:** Open
+**Confidence:** Medium
+**Severity:** High
+**Evidence:** `src/example.py:42-48` (snapshot <source identity>)
+**Impact:** Concrete effect and the preconditions required.
+```
+
+Keep the status value to one of the defined lifecycle values. A record that is missing or has an unrecognized status needs repair before it can be counted as open, resolved, or closed; do not infer its status from surrounding prose.
+
+Severity and confidence answer different questions. Confidence describes how directly the evidence supports the claim. Severity describes the impact if the behavior occurs under the stated preconditions. Do not lower severity merely because evidence is incomplete; lower confidence or keep the candidate parked instead.
+
+Use these impact bands unless the project's charter defines a stricter, domain-specific scale:
+
+- **Critical:** broad or irreversible loss of core service, data, or business operation; no practical containment.
+- **High:** major user, business, or data impact, or a failure that can affect many users or critical workflows.
+- **Medium:** bounded but material impact, with limited scope or a practical workaround.
+- **Low:** minor impact, uncommon edge case, or mostly maintainability/reliability cost.
+- **Informational:** observation with no demonstrated material impact.
+
+State the triggering conditions, affected components/data, scope, and available recovery or workaround. Keep severity distinct from the project's priority: charter trade-offs can lower priority or justify an intentional closure, but they do not change the impact that would occur.
+
+## Scenario-driven architecture review
+
+For each high- or medium-risk flow, trace one realistic operation across its boundaries: input/event → validation and decision → side effect → persistence/acknowledgement → retry/recovery. Follow the actual callers and state transitions; do not assess isolated functions without checking how they are used.
+
+Exercise only scenarios that match the target's architecture. Common examples include:
+
+- timeout after a remote side effect but before local acknowledgement; duplicate, delayed, or reordered events;
+- process restart between persistence and acknowledgement; partial transaction or partial batch completion;
+- one dependency unavailable, rate-limited, slow, or returning malformed data;
+- concurrent requests racing on shared state; retries arriving after a configuration or schema change;
+- backpressure, queue growth, exhausted disk/memory, or a task exceeding its scheduled interval;
+- rolling deployment where old and new versions coexist, or a migration must be rolled back.
+
+For each selected scenario, record the starting state, triggering event, expected invariant, recovery behavior, and the code path that supports the conclusion. If the implementation does not define an expected invariant or recovery path, describe that as a design gap only when the relevant code and caller evidence establish the consequence.
+
+## Verification levels
+
+Use precise labels for what was actually checked:
+
+1. **Static review:** source and call-path inspection.
+2. **Build/compile:** the configured compiler or checker completed successfully for the active snapshot.
+3. **Tested:** a named automated test or controlled local scenario ran and passed against the active snapshot.
+4. **Runtime-verified:** behavior was observed in a specified runtime environment and version.
+
+Never promote a finding based on a test that was not run, a test result from a different snapshot, or a compile check that covered only part of the target. Record skipped checks and their reason. Runtime verification requires a concrete environment and observation; source reasoning alone cannot establish it.
+
 **Statuses, in order — never skip a transition:**
 `Open` → `Investigating` → `Candidate Fix Prepared` → `Fixed-but-unverified` → `Verified-in-code` → `Verified-runtime`, with `Closed-as-intentional` available once the user confirms a behavior is deliberate.
 

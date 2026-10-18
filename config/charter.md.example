@@ -50,9 +50,9 @@ Example:
 
 ## Acceptable trade-offs
 
-*What you are knowingly willing to live with. Findings in these areas should
-be reported at low severity, not escalated — and if the auditor keeps
-escalating them, that is drift worth catching.*
+*What you are knowingly willing to live with. These choices can change a
+finding's priority or support closing it as intentional; they do not change
+the impact severity if the behavior occurs.*
 
 Example:
 - Verbose logging over log volume.

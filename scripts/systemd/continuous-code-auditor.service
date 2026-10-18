@@ -4,7 +4,9 @@ Description=Continuous code auditor (single execution)
 [Service]
 Type=oneshot
 ExecStart=/opt/auditor/continuous-code-auditor/scripts/run_auditor.sh
-TimeoutStartSec=240
+# Includes the configured model timeout plus time to make a source snapshot.
+# Raise this for very large repositories or a higher TIMEOUT_SECONDS.
+TimeoutStartSec=300
 
 # --- least-privilege, even when the host is root-administered ---
 User=auditor

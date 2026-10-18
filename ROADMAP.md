@@ -10,14 +10,14 @@ Verified against the codebase as of v1.8.0, not from recollection:
 |---|---|---|
 | 1 | Adapter capability matrix (`adapters/capabilities.json`) | **Done** (v1.7.0) — behaviorally verified, not hand-maintained |
 | 2 | Feature flags (`ENABLE_*`) | Not started |
-| 3 | Finding schema normalization | Not started |
+| 3 | Finding schema normalization | Not started — the current markdown records now have a canonical status field for checkpoint counts; full machine-readable finding records remain a v2 design item |
 | 4 | State migration framework | **Partly resolved** — the first bump (3→4) landed additively in v1.1.0 and needed no migration script; still open for the first bump that requires an actual transformation |
 | 5 | Core engine extraction (split `SKILL.md`) | Not started — and arguably not needed: `SKILL.md` is 133 lines and already delegates to `references/` |
 | 6 | Domain-agnostic framework (`continuous-auditor-framework`) | **Deferred by explicit decision** — v2.0.0-scale identity change, parked intentionally |
 | 7 | Event bus | Not started |
 | 8 | Notification hooks (`hooks/*.sh`) | Not started — `alert()` in `scripts/lib/reliability.sh` is still a log-only stub |
 | 9 | Test suite | **Done** (v1.0.0) — `tests/`, 40 checks, wired into CI |
-| 10 | Task scheduler / parallel workers | Not started |
+| 10 | Task scheduler / parallel workers | Not started — sequential execution remains intentional; write-ahead task progress is now required for recovery |
 | 11 | `doctor` command + `TROUBLESHOOTING.md` | **Done** (v1.2.0) — `scripts/commands/doctor.sh`, 8 tests |
 | 12 | `SECURITY.md` + incident log | **Done** (v1.2.0) — reporting policy, threat model, numbered incident record |
 | 13 | Secret/credential redaction in findings evidence | **Done** (v1.4.0) — §12 rule + `secret_patterns.sh` scanner wired into doctor |
@@ -76,7 +76,7 @@ Splitting finding-discovery, verification, runtime-validation, report-generation
 
 ## 11. `doctor`/diagnose command + `TROUBLESHOOTING.md` — DONE (v1.2.0)
 
-Raised after studying claude-mem and agentmemory; now the single most evidence-backed item on this list. Five independent confirmations of the same pattern: claude-mem ships a dedicated `troubleshoot` skill; agentmemory has `agentmemory doctor`, a `memory_diagnose`/`memory_heal` tool pair, an entire `src/cli/doctor-diagnostics.ts` module with its own test suite (`test/cli-doctor-fixes.test.ts`, `test/diagnostic-followup-rate.test.ts`), *and* a literal `plugin/skills/_shared/TROUBLESHOOTING.md`. This should probably be the next thing built, not just documented — a mapping from our own exit codes / log patterns (`references/workspace-and-execution.md`'s exit-code contract) to fixes, plus an eighth operational command (`/continuous-code-auditor-doctor`) that runs the checks and reports which one is actually broken, the same deterministic-script philosophy as the existing seven commands.
+Implemented in v1.2.0: `scripts/commands/doctor.sh` maps environment and workspace checks to actionable diagnostics, and `TROUBLESHOOTING.md` maps runner exit codes and log patterns to recovery steps. Subsequent releases added `alignment`; the current operational surface has nine commands, documented in `commands/README.md`.
 
 ## 12. `SECURITY.md` + a transparent incident log — DONE (v1.2.0)
 

@@ -73,7 +73,7 @@ for skills_dir_name in .claude/skills .gemini/skills .codex/skills .hermes/skill
 done
 
 # Slash-command files installed by installer/install.sh. Without this, the
-# eight /continuous-code-auditor-* commands stay visible in the CLI after an
+# obsolete /continuous-code-auditor-* commands stay visible in the CLI after an
 # uninstall and fail when invoked, because the script they point at is gone.
 removed_cmds=0
 for cmd_dir in .claude/commands .gemini/commands; do

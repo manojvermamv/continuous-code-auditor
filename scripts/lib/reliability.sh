@@ -62,6 +62,7 @@ set -euo pipefail
 
 : "${TIMEOUT_SECONDS:=240}"
 : "${FAILURE_THRESHOLD:=3}"
+: "${SOURCE_SNAPSHOT_RETENTION_COUNT:=10}"
 
 LOCK="${LOCK:-/tmp/continuous_code_auditor.lock}"
 LOCK_META="$LOCK.meta"
@@ -91,6 +92,9 @@ auditor_context_block() {
   block="AUDIT_CONTEXT (authoritative for this run — use these, don't infer them):
   PROJECT=$PROJECT
   AUDIT_TARGET=$AUDIT_TARGET
+  AUDIT_SOURCE_SNAPSHOT=$AUDIT_SOURCE_SNAPSHOT
+  AUDIT_SOURCE_HASH=$AUDIT_SOURCE_HASH
+  AUDIT_SOURCE_TARGETS=$AUDIT_SOURCE_TARGETS
   SKILL_DIR=$SKILL_DIR
   AUDITOR_VERSION=$AUDITOR_VERSION"
   if [[ -n "${PRIOR_FAILURE_NOTE:-}" ]]; then
@@ -116,6 +120,7 @@ EXIT_PROMPT_FAILURE=40
 EXIT_STATE_RECOVERY_INVOKED=50
 
 _CLEANUP_PATHS=()
+_LOCK_ACQUIRED=false
 
 reliability_register_cleanup() {
   _CLEANUP_PATHS+=("$1")
@@ -126,7 +131,11 @@ _reliability_cleanup() {
   for p in "${_CLEANUP_PATHS[@]+"${_CLEANUP_PATHS[@]}"}"; do
     rm -f "$p"
   done
-  rm -f "$LOCK_META"
+  # A contender installs this trap before trying flock. Only the process
+  # that acquired the lock may remove its metadata on exit.
+  if [[ "$_LOCK_ACQUIRED" == true ]]; then
+    rm -f "$LOCK_META"
+  fi
 }
 trap _reliability_cleanup EXIT
 
@@ -374,6 +383,20 @@ reliability_main() {
     exit "$EXIT_RESOURCE_DEFERRED"
   fi
 
+  # Serialize every subsequent shared-state mutation, including retention
+  # and preflight failure accounting, not only the model invocation.
+  exec 200>"$LOCK"
+  if ! flock -n 200; then
+    if [[ -s "$LOCK_META" ]]; then
+      log "skip: lock held by $(cat "$LOCK_META")" "lock_held"
+    else
+      log "skip: another audit instance already holds the lock (no metadata found)"
+    fi
+    exit "$EXIT_LOCK_HELD"
+  fi
+  _LOCK_ACQUIRED=true
+  printf 'pid=%s host=%s started_at=%s\n' "$$" "$(hostname)" "$(date -Iseconds)" > "$LOCK_META"
+
   # Before preflight, so pruning can free space ahead of the disk gate rather
   # than after it has already hard-failed the run.
   enforce_retention
@@ -381,10 +404,14 @@ reliability_main() {
   PREFLIGHT_FAILED=""
   if [[ -z "${MODEL_NAME:-}" || "$MODEL_NAME" == CHANGE_ME* ]]; then
     PREFLIGHT_FAILED="MODEL_NAME was never configured (still a CHANGE_ME placeholder)"
+  elif [[ ! "${SOURCE_SNAPSHOT_RETENTION_COUNT:-10}" =~ ^([2-9]|[1-9][0-9]+)$ ]]; then
+    PREFLIGHT_FAILED="SOURCE_SNAPSHOT_RETENTION_COUNT must be an integer of at least 2"
   elif ! command -v "$AGENT_BIN" >/dev/null 2>&1; then
     PREFLIGHT_FAILED="$AGENT_BIN CLI not found on PATH"
   elif [[ ! -d "$PROJECT" ]]; then
     PREFLIGHT_FAILED="PROJECT directory not found at $PROJECT"
+  elif ! command -v python3 >/dev/null 2>&1; then
+    PREFLIGHT_FAILED="python3 not found on PATH (required to create a stable source snapshot)"
   elif [[ ! -f "$SKILL_DIR/SKILL.md" ]]; then
     PREFLIGHT_FAILED="SKILL.md not found under SKILL_DIR ($SKILL_DIR)"
   elif command -v df >/dev/null 2>&1; then
@@ -411,6 +438,25 @@ reliability_main() {
     exit "$EXIT_PREFLIGHT_FAILED"
   fi
 
+  # The model reads a stable copy, never a live tree that can change during
+  # the turn. Findings continue to cite paths in the original target.
+  local snapshot_output snapshot_error
+  if ! snapshot_output="$(python3 "$SKILL_DIR/scripts/create_source_snapshot.py" \
+      "$PROJECT" "$AUDIT_TARGET" "$SOURCE_SNAPSHOT_RETENTION_COUNT" 2>"$LOG_DIR/source_snapshot_error.txt")"; then
+    snapshot_error="$(cat "$LOG_DIR/source_snapshot_error.txt" 2>/dev/null || echo 'unknown snapshot error')"
+    record_failure "source snapshot failed: $snapshot_error"
+    exit "$EXIT_SOURCE_UNAVAILABLE"
+  fi
+  AUDIT_SOURCE_SNAPSHOT="$(printf '%s\n' "$snapshot_output" | sed -n '1p')"
+  AUDIT_SOURCE_HASH="$(printf '%s\n' "$snapshot_output" | sed -n '2p')"
+  AUDIT_SOURCE_TARGETS="$(printf '%s\n' "$snapshot_output" | sed -n '3p')"
+  if [[ -z "$AUDIT_SOURCE_SNAPSHOT" || ! "$AUDIT_SOURCE_HASH" =~ ^[0-9a-f]{64}$ || -z "$AUDIT_SOURCE_TARGETS" ]]; then
+    record_failure "source snapshot helper returned incomplete metadata"
+    exit "$EXIT_SOURCE_UNAVAILABLE"
+  fi
+  rm -f "$LOG_DIR/source_snapshot_error.txt"
+  log "source snapshot ready: hash=$AUDIT_SOURCE_HASH path=$AUDIT_SOURCE_SNAPSHOT"
+
   cd "$PROJECT"
 
   PRIOR_FAILURE_NOTE=""
@@ -423,19 +469,7 @@ reliability_main() {
   reliability_register_cleanup "$RUN_OUTPUT"
   reliability_register_cleanup "$ERROR_LOG"
 
-  # Step 1: acquire lock.
-  exec 200>"$LOCK"
-  if ! flock -n 200; then
-    if [[ -s "$LOCK_META" ]]; then
-      log "skip: lock held by $(cat "$LOCK_META")" "lock_held"
-    else
-      log "skip: another audit instance already holds the lock (no metadata found)"
-    fi
-    exit "$EXIT_LOCK_HELD"
-  fi
-  printf 'pid=%s host=%s started_at=%s\n' "$$" "$(hostname)" "$(date -Iseconds)" > "$LOCK_META"
-
-  # Step 2: execute the prompt. Step 3: capture the exit code.
+  # Execute the prompt and capture its exit code.
   set +e
   invoke_agent
   STATUS=$?

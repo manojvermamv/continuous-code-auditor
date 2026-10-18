@@ -28,6 +28,10 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+# Reset must never move the workspace while a scheduled execution is writing
+# it. The lock is released automatically when this script exits.
+acquire_workspace_lock
+
 CONFIRMED=false
 [[ "${1:-}" == "--confirm" ]] && CONFIRMED=true
 

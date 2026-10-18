@@ -4,7 +4,7 @@ Three independent checks, all offline, all runnable locally exactly as CI runs t
 
 | Check | Command | What it catches |
 |---|---|---|
-| Integration tests | `tests/run_tests.sh` | Real behavior: all five adapters, locking, the circuit breaker, pause/resume, and all eight operational commands, against mocked CLI binaries. |
+| Integration tests | `tests/run_tests.sh` | Real behavior: all five adapters, source snapshots, locking, the circuit breaker, pause/resume, and operational commands, against mocked CLI binaries. |
 | Frontmatter validation | `tests/validate_frontmatter.py` | `SKILL.md`'s frontmatter against the [agentskills.io spec](https://agentskills.io/specification) — required fields, length limits, name/directory match, and backtick-referenced files that don't exist. |
 | Markdown link check | `tests/check_markdown_links.py` | Broken relative links across every `.md` file in the repo. |
 | Capability verification | `tests/verify_capabilities.sh` | Whether `adapters/capabilities.json` matches what the adapters *actually do* — probed behaviorally, not read off the source. |
@@ -23,7 +23,7 @@ shellcheck scripts/lib/*.sh scripts/runners/*.sh scripts/commands/*.sh scripts/*
 
 ## What the integration tests do and don't prove
 
-`tests/lib/mock_bins.sh` provides fake `opencode`/`claude`/`gemini`/`codex`/`hermes`/`jq` binaries — enough to exercise this repo's own bash logic (dispatch, config loading, locking, the circuit breaker, exit-code mapping, the operational commands) in complete isolation from any real agent CLI or model. **This is not a substitute for testing against the real CLIs** — see `adapters/README.md` point 7. Every adapter's actual flags were checked against real `--help` output or official docs when written; the mocked tests only prove this repo's side of the contract holds, not that a given CLI version still honors the flags an adapter assumes.
+`tests/lib/mock_bins.sh` provides fake `opencode`/`claude`/`gemini`/`codex`/`hermes`/`jq` binaries — enough to exercise this repo's own bash logic (dispatch, source snapshots, config loading, locking, the circuit breaker, exit-code mapping, and operational commands) in isolation from a real model. **This does not establish compatibility with current vendor CLI releases** — see `adapters/README.md`. Re-check each adapter after a CLI upgrade.
 
 The mock `jq` (`write_mock_jq_matching`) evaluates both filter shapes this project's adapters actually use — `select(.type == "X")` (Codex CLI) and `select(has("field"))` (opencode, Claude Code, and the cost-extraction hook) — with recursive descent through nested JSON. An earlier version only handled the first shape, which meant the has(...) code paths were silently never exercised at all despite the suite reporting green; if you add a filter shape no adapter has used yet, extend the mock rather than assuming it'll "probably still work" — that exact assumption was wrong once already in this project's own history.
 

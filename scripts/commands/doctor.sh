@@ -54,6 +54,13 @@ AUDIT_TARGET="${AUDIT_TARGET:-.}"
 AGENT_CLI="${AGENT_CLI:-}"
 MODEL_NAME="${MODEL_NAME:-}"
 LOCK="${LOCK:-/tmp/continuous_code_auditor.lock}"
+SOURCE_SNAPSHOT_RETENTION_COUNT="${SOURCE_SNAPSHOT_RETENTION_COUNT:-10}"
+
+if [[ "$SOURCE_SNAPSHOT_RETENTION_COUNT" =~ ^([2-9]|[1-9][0-9]+)$ ]]; then
+  pass "source snapshot retention count is $SOURCE_SNAPSHOT_RETENTION_COUNT"
+else
+  fail "SOURCE_SNAPSHOT_RETENTION_COUNT must be an integer of at least 2" "set it to a count such as 10"
+fi
 
 if [[ -z "$AGENT_CLI" ]]; then
   fail "AGENT_CLI is not set" "set AGENT_CLI in $CONFIG_FILE (opencode | claude-code | gemini-cli | codex-cli | hermes)"
@@ -73,7 +80,7 @@ fi
 
 # --------------------------------------------------------- dependencies --
 section "Dependencies"
-for bin in bash flock date awk; do
+for bin in bash flock date awk python3; do
   if command -v "$bin" >/dev/null 2>&1; then pass "$bin present"
   else fail "$bin not found on PATH" "install it — required by scripts/lib/reliability.sh"; fi
 done
@@ -99,7 +106,12 @@ case "$AGENT_CLI" in
 esac
 if [[ -n "$AGENT_BIN" ]]; then
   if command -v "$AGENT_BIN" >/dev/null 2>&1; then
-    pass "agent CLI binary '$AGENT_BIN' on PATH"
+    agent_version="$("$AGENT_BIN" --version 2>&1 | head -n 1 || true)"
+    if [[ -n "$agent_version" ]]; then
+      pass "agent CLI binary '$AGENT_BIN' on PATH ($agent_version)"
+    else
+      pass "agent CLI binary '$AGENT_BIN' on PATH (version not reported)"
+    fi
   else
     fail "agent CLI binary '$AGENT_BIN' not found on PATH" \
          "install it, or make sure PATH is set for the user the scheduler runs as (cron/systemd have a minimal PATH — this is a very common cause of exit 15)"

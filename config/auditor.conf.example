@@ -34,6 +34,12 @@ PROJECT="/srv/your-project"
 # Paths are relative to PROJECT unless given as absolute paths.
 AUDIT_TARGET="."
 
+# --- Number of recent stable source snapshots to retain ---
+# Keep at least two so a changed source and its immediately previous snapshot
+# remain available for the diff/archive step. Unchanged sources reuse the
+# existing snapshot; older snapshots are pruned after this count.
+SOURCE_SNAPSHOT_RETENTION_COUNT=10
+
 # --- Where the wrapper's own operational files go ---
 # Lock, lock metadata, failure counters, held/paused flags, session id, and
 # the plain-text logs. Does not need to be inside PROJECT.

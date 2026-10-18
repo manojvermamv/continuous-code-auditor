@@ -14,6 +14,7 @@
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+acquire_workspace_lock
 
 LABEL="$(sanitize_label "${1:-}")"
 if [[ -n "${1:-}" && -z "$LABEL" ]]; then

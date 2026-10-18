@@ -2,7 +2,7 @@
 
 This skill's reliability engine (`scripts/lib/reliability.sh`) is completely CLI-agnostic. Everything that differs between agent CLIs — the actual invocation, how to attach or auto-discover the skill, session continuity, and how to detect a real failure — is isolated in one runner script per CLI under `scripts/runners/`, documented here in one `adapters/<cli>.md` file per CLI. This is what makes "support more agent CLIs later" a matter of adding a file, not rewriting the skill.
 
-Currently supported, each verified against real `--help` output or official documentation at the time it was written (see the individual files for sources and version caveats):
+Currently supported, each verified against real `--help` output or official documentation when added (see the individual files for sources and version caveats). There is no cross-vendor minimum-version guarantee: run `doctor` after installing or upgrading a CLI and re-check the adapter invocation against that installed version before relying on scheduled runs. The mock harness verifies this repository's argument construction and parsing, not continued compatibility with a vendor's latest release.
 
 | CLI | Runner | Adapter doc |
 |---|---|---|

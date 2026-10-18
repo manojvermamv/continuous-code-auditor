@@ -2,7 +2,7 @@
 # tests/run_tests.sh
 #
 # Integration test suite for continuous-code-auditor. Exercises the
-# reliability engine, all five adapters, and the seven operational commands
+# reliability engine, all five adapters, and the operational commands
 # against mocked CLI binaries — offline, fast, and repeatable. Exit 0 if
 # every check passes, 1 otherwise (so CI can gate on it).
 #
@@ -86,6 +86,19 @@ for cli in opencode claude-code gemini-cli codex-cli hermes; do
   PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
   check "adapter $cli: clean run exits 0" "0" "$?"
 done
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/commands/doctor.sh" >"$TMP_ROOT/doctor-version.txt" 2>&1
+check "doctor reports the installed agent CLI version when available" "0" "$(grep -q 'agent CLI binary' "$TMP_ROOT/doctor-version.txt"; echo $?)"
+SNAPSHOT_POINTER="$PROJECT/work/source_snapshots/current.json"
+check "runner creates a stable source snapshot" "0" "$([[ -s "$SNAPSHOT_POINTER" ]]; echo $?)"
+SNAPSHOT_PATH_BEFORE="$(python3 -c "import json; print(json.load(open('$SNAPSHOT_POINTER'))['snapshot'])")"
+SNAPSHOT_HASH_BEFORE="$(python3 -c "import json; print(json.load(open('$SNAPSHOT_POINTER'))['source_hash'])")"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+SNAPSHOT_PATH_AFTER="$(python3 -c "import json; print(json.load(open('$SNAPSHOT_POINTER'))['snapshot'])")"
+check "unchanged source reuses the existing snapshot" "$SNAPSHOT_PATH_BEFORE" "$SNAPSHOT_PATH_AFTER"
+printf '# changed after snapshot test\n' >> "$PROJECT/target.py"
+PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
+SNAPSHOT_HASH_AFTER="$(python3 -c "import json; print(json.load(open('$SNAPSHOT_POINTER'))['source_hash'])")"
+check "changed source creates a new source identity" "0" "$([[ "$SNAPSHOT_HASH_AFTER" != "$SNAPSHOT_HASH_BEFORE" ]]; echo $?)"
 
 echo
 echo "-- codex-cli: session-id extraction and turn.failed detection (needs a real filter, not the no-match stub) --"
@@ -207,11 +220,13 @@ exec 200>"$TMP_ROOT/test.lock"
 flock 200
 sleep 3
 EOF
+printf 'pid=holder host=test started_at=now\n' > "$TMP_ROOT/test.lock.meta"
 bash "$TMP_ROOT/hold_lock.sh" &
 BGPID=$!
 sleep 0.5
 PATH="$BINDIR:$PATH" bash "$SKILL_DIR/scripts/run_auditor.sh" >/dev/null 2>&1
 check "lock contention" "10" "$?"
+check "lock contender preserves active owner's metadata" "0" "$(grep -q 'pid=holder' "$TMP_ROOT/test.lock.meta"; echo $?)"
 wait "$BGPID" 2>/dev/null
 
 write_failure_mocks "$BINDIR"
@@ -310,7 +325,7 @@ echo "CHARTER_FILE=\"$CHARTER\"" >> "$CONFIG"
 printf '# Charter\nPurpose: test project\n' > "$CHARTER"
 CHARTER_HASH_BEFORE="$(sha256sum "$CHARTER" | cut -d' ' -f1)"
 
-printf 'F-0001 Open\n' > "$PROJECT/work/continuous_code_audit_findings.md"
+printf '### F-0001 — Example\n\n**Status:** Open\n' > "$PROJECT/work/continuous_code_audit_findings.md"
 bash "$SKILL_DIR/scripts/checkpoint.sh" >/dev/null 2>&1
 check "checkpoint: creates a baseline" "0" "$([[ -s "$CP_DIR/baseline.json" ]]; echo $?)"
 check "checkpoint: appends to the timeline" "0" "$([[ -s "$CP_DIR/timeline.jsonl" ]]; echo $?)"
@@ -319,10 +334,16 @@ import json
 for l in open('$CP_DIR/timeline.jsonl'):
     if l.strip(): json.loads(l)
 " >/dev/null 2>&1; echo $?)"
+printf '\nReview notes mention Open and Verified-in-code as examples.\n' >> "$PROJECT/work/continuous_code_audit_findings.md"
+bash "$SKILL_DIR/scripts/checkpoint.sh" >/dev/null 2>&1
+check "checkpoint: prose status mentions do not affect status counts" "1" "$(python3 -c "
+import json
+print(json.loads(open('$CP_DIR/timeline.jsonl').readlines()[-1])['findings']['open'])
+")"
 
 # The baseline must survive everything — 'initial to latest' depends on it.
 BASELINE_BEFORE="$(cat "$CP_DIR/baseline.json")"
-printf 'F-0001 Open\nF-0002 Open\nF-0003 Open\n' > "$PROJECT/work/continuous_code_audit_findings.md"
+printf '### F-0001 — Example\n\n**Status:** Open\n\n### F-0002 — Example\n\n**Status:** Open\n\n### F-0003 — Example\n\n**Status:** Open\n' > "$PROJECT/work/continuous_code_audit_findings.md"
 for _ in 1 2 3; do bash "$SKILL_DIR/scripts/checkpoint.sh" >/dev/null 2>&1; done
 check "checkpoint: baseline is never rewritten by later checkpoints" "$BASELINE_BEFORE" "$(cat "$CP_DIR/baseline.json")"
 
@@ -337,15 +358,20 @@ sed -i '/^CHECKPOINT_RETENTION=/d' "$CONFIG"
 bash "$SKILL_DIR/scripts/commands/alignment.sh" >"$TMP_ROOT/align.txt" 2>&1
 check "alignment: computes a trajectory" "0" "$?"
 check "alignment: detects divergence (opened, none resolved)" "0" "$(grep -q 'DIVERGING' "$TMP_ROOT/align.txt"; echo $?)"
-check "alignment: reports the baseline->latest window" "0" "$(grep -q 'baseline -> latest' "$TMP_ROOT/align.txt"; echo $?)"
+check "alignment: reports the current charter epoch window" "0" "$(grep -q 'current charter epoch' "$TMP_ROOT/align.txt"; echo $?)"
 
 # THE critical property: nothing in the alignment path may modify the charter.
 check "alignment: charter is never modified by checkpoint or alignment" "$CHARTER_HASH_BEFORE" "$(sha256sum "$CHARTER" | cut -d' ' -f1)"
 
-# A charter edit must be surfaced as re-baselining, not silently absorbed.
+# A charter edit must be surfaced, and direction must wait for a checkpoint
+# under that new charter hash.
 printf '# Charter\nPurpose: CHANGED\n' > "$CHARTER"
 bash "$SKILL_DIR/scripts/commands/alignment.sh" >"$TMP_ROOT/align2.txt" 2>&1
 check "alignment: flags a charter change since baseline" "0" "$(grep -q 'CHANGED' "$TMP_ROOT/align2.txt"; echo $?)"
+check "alignment: does not infer direction before the new charter checkpoint" "0" "$(grep -q 'no direction is inferred' "$TMP_ROOT/align2.txt"; echo $?)"
+bash "$SKILL_DIR/scripts/checkpoint.sh" >/dev/null 2>&1
+bash "$SKILL_DIR/scripts/commands/alignment.sh" >"$TMP_ROOT/align2b.txt" 2>&1
+check "alignment: starts a separate epoch after the new charter checkpoint" "0" "$(grep -q '1 checkpoints' "$TMP_ROOT/align2b.txt"; echo $?)"
 
 # Missing charter must degrade honestly, not invent an intent.
 rm -f "$CHARTER"

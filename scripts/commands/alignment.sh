@@ -54,9 +54,9 @@ import json; print(json.load(open('$BASELINE')).get('charter_hash','none'))" 2>/
     echo "  note:    charter was added AFTER the baseline checkpoint — the earliest"
     echo "           part of this timeline predates any stated intent."
   elif [[ "$now_hash" != "$base_hash" ]]; then
-    echo "  CHANGED: the charter has been edited since the baseline ($base_hash -> $now_hash)."
-    echo "           That is re-baselining, not drift — but only if it was deliberate."
-    echo "           Confirm it's recorded in the charter's revision log."
+    echo "  CHANGED: the charter differs from the first checkpoint ($base_hash -> $now_hash)."
+    echo "           Trajectory is compared only within a checkpoint epoch with this hash."
+    echo "           Confirm the revision is recorded in the charter's revision log."
   else
     echo "  stable:  unchanged since baseline ($base_hash)"
   fi
@@ -69,13 +69,45 @@ fi
 
 # --- trajectory ----------------------------------------------------------
 echo
-echo "-- trajectory: baseline -> latest --"
-python3 - "$BASELINE" "$TIMELINE" <<'PY'
+echo "-- trajectory: current charter epoch --"
+CURRENT_CHARTER_HASH="none"
+[[ -f "$CHARTER" ]] && CURRENT_CHARTER_HASH="$(sha256sum "$CHARTER" | cut -c1-16)"
+EPOCH_BASELINE="$CP_DIR/baseline_${CURRENT_CHARTER_HASH}.json"
+[[ -f "$EPOCH_BASELINE" ]] || EPOCH_BASELINE="$BASELINE"
+python3 - "$EPOCH_BASELINE" "$TIMELINE" "$CURRENT_CHARTER_HASH" <<'PY' || exit $?
 import json, sys
 from datetime import datetime
 
-baseline = json.load(open(sys.argv[1]))
-rows = [json.loads(l) for l in open(sys.argv[2]) if l.strip()]
+try:
+    epoch_baseline = json.load(open(sys.argv[1], encoding="utf-8"))
+    all_rows = [json.loads(l) for l in open(sys.argv[2], encoding="utf-8") if l.strip()]
+except (OSError, json.JSONDecodeError) as exc:
+    print(f"alignment: invalid checkpoint data: {exc}", file=sys.stderr)
+    sys.exit(1)
+if not all_rows:
+    print("alignment: checkpoint timeline is empty", file=sys.stderr)
+    sys.exit(1)
+
+current_hash = sys.argv[3]
+if current_hash != "none":
+    if all_rows[-1].get("charter_hash", "none") != current_hash:
+        print("  No checkpoint has been recorded for the current charter revision.")
+        print("  Run scripts/checkpoint.sh and review again; no direction is inferred.")
+        sys.exit(0)
+    if epoch_baseline.get("charter_hash", "none") == current_hash:
+        baseline = epoch_baseline
+        rows = [row for row in all_rows if row.get("charter_hash", "none") == current_hash]
+    else:
+        # Upgrade from a timeline collected before per-charter baselines were
+        # added: use the earliest retained checkpoint with the current hash.
+        rows = []
+        for row in all_rows:
+            if row.get("charter_hash", "none") == current_hash:
+                rows.append(row)
+        baseline = rows[0]
+else:
+    rows = all_rows
+    baseline = epoch_baseline
 latest = rows[-1]
 
 def f(rec, k): return rec.get("findings", {}).get(k, 0)
